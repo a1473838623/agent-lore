@@ -58,10 +58,10 @@ function clear(cwd) {
 /** 渲染成注入文本。刻意写得像一道闸，而不是一句建议 */
 function render(spec) {
   if (!spec) return null;
-  const lines = [`【当前需求边界】${spec.id}`];
-  if (spec.scope) lines.push(`范围内：${spec.scope}`);
-  if (spec.out && spec.out.length) lines.push(`明确不在范围内：${spec.out.join('；')}`);
-  lines.push('超出以上范围的改动，先停下来确认，不要顺手做。');
+  const lines = [`[Active task scope] ${spec.id}`];
+  if (spec.scope) lines.push(`In scope: ${spec.scope}`);
+  if (spec.out && spec.out.length) lines.push(`Explicitly OUT of scope: ${spec.out.join('; ')}`);
+  lines.push('Stop and ask before making any change outside this scope. Do not do it "while you are here".');
   return lines.join('\n');
 }
 

@@ -126,7 +126,10 @@ const CMDS = {
 
   sync() {                         // lore sync [--global]   convention → CLAUDE.md
     const r = inject.syncClaudeMd(cwd, { global: has('global') });
-    console.log(r.written ? `✅ ${r.count} 条规范已写入 ${r.target}` : `跳过：${r.reason}`);
+    if (!r.written) return console.log(`跳过：${r.reason}`);
+    console.log(r.verified
+      ? `✅ ${r.count} 条规范已写入 ${r.target}`
+      : `❌ 写入未生效：期望 ${r.count} 条，文件里只有 ${r.actual} 条 — ${r.target}`);
   },
 
   // —— 注入 ——

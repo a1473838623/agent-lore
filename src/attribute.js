@@ -28,9 +28,12 @@ const CLASSIFY_PROMPT = `你在判断一次代码修改的性质。上面是 AI 
 对每一处改动输出一行 JSON：
 {"id":"<原 id>","label":"style|bug|feature","confidence":0.0-1.0,"rule":"<一句话规范或坑，feature 留空>"}
 
+⚠️ **rule 必须用英文写** —— 它最终会进 CLAUDE.md 被注入模型上下文，英文更省 token。
+其余说明用中文无所谓，只有 rule 字段必须是英文。
+
 rule 要写成**可复用的一般性陈述**，不要提具体变量名。
-好例子："Spring Bean 依赖使用构造器注入，不用 @Autowired 字段注入"
-坏例子："把 OrderService 里的 foo 字段改成构造器参数"`;
+好例子："Inject Spring bean dependencies via constructor, not @Autowired field injection"
+坏例子："Change the foo field in OrderService to a constructor parameter"`;
 
 function buildPrompt(records) {
   const blocks = records.map((r) => `## id=${r.id}  文件: ${r.file}  (AI 写完 ${r.ageMin} 分钟后被改)

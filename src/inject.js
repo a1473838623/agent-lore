@@ -62,7 +62,8 @@ function buildContext(cwd, file) {
   // 边界排在踩坑前面：它是硬约束，踩坑是参考
   const blocks = [];
   if (active) blocks.push(active);
-  if (lines.length) blocks.push(`【历史踩坑】这个文件相关（来自过往人工修正）：\n${lines.join('\n')}`);
+  // 注入文本一律英文：它进的是模型上下文，不是给人看的
+  if (lines.length) blocks.push(`[Known pitfalls for this file] (learned from past human corrections)\n${lines.join('\n')}`);
 
   return {
     text: blocks.join('\n\n'),
@@ -91,19 +92,34 @@ function syncClaudeMd(cwd, { global: isGlobal = false } = {}) {
   const BEGIN = '<!-- agent-lore:begin -->';
   const END = '<!-- agent-lore:end -->';
   const rules = conv.split('\n').filter((l) => l.startsWith('- ')).join('\n');
-  const title = isGlobal ? '通用工程规范（agent-lore 自动维护，勿手改此段）'
-                         : '本仓库编码规范（agent-lore 自动维护，勿手改此段）';
+  // 标题也用英文——整个 CLAUDE.md 都会进模型上下文
+  const title = isGlobal ? 'General engineering rules (maintained by agent-lore — do not edit this block)'
+                         : 'Repository coding conventions (maintained by agent-lore — do not edit this block)';
   const block = `${BEGIN}\n## ${title}\n\n${rules}\n${END}`;
 
   let existing = '';
   try { existing = fs.readFileSync(target, 'utf8'); } catch { /* 首次创建 */ }
 
-  const next = existing.includes(BEGIN)
-    ? existing.replace(new RegExp(`${BEGIN}[\s\S]*?${END}`), block)
-    : (existing ? existing.trimEnd() + '\n\n' + block + '\n' : block + '\n');
+  // 用 indexOf/slice 而不是 replace(正则, block)，两个原因：
+  //   ① 正则里的 [\s\S] 经过任何字符串处理都可能退化成 [sS]，而 replace 不匹配时
+  //      **静默返回原串**——写入"成功"但内容没变，最难查的那种 bug
+  //   ② String.replace 的替换串里 $& $` $' 有特殊含义，规范文本里出现就会被吃掉
+  let next;
+  const i = existing.indexOf(BEGIN);
+  const j = existing.indexOf(END);
+  if (i >= 0 && j > i) {
+    next = existing.slice(0, i) + block + existing.slice(j + END.length);
+  } else {
+    next = existing ? existing.trimEnd() + '\n\n' + block + '\n' : block + '\n';
+  }
 
   fs.writeFileSync(target, next, 'utf8');
-  return { written: true, target, count: rules.split('\n').filter(Boolean).length };
+
+  // 写完必须验证：上面那个 bug 就是"报告成功但没生效"
+  const verify = fs.readFileSync(target, 'utf8');
+  const written = rules.split('\n').filter(Boolean).length;
+  const actual = verify.split('\n').filter((l) => l.startsWith('- ')).length;
+  return { written: true, target, count: written, verified: actual === written, actual };
 }
 
 module.exports = { buildContext, syncClaudeMd };
