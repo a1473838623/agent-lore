@@ -206,7 +206,7 @@ function render() {
 
   // 状态条
   H.push(`<div class="stats">
-    ${stat(d.conventions.length, '已确认规范')}
+    ${stat(d.conventions.length, '已确认规范' + (d.conventions.some(c => c.scope === 'global') ? '（含通用）' : ''))}
     ${stat(d.pitfalls.length, '踩坑记录')}
     ${stat(d.candidates.length, '候选规范')}
     ${stat(todo, '待你处理', todo > 0)}
@@ -300,6 +300,33 @@ function scopeSection(d) {
   }
   return rows.join('');
 }
+
+/* ── 作用域 ── */
+let scopeFilter = null;   // null=全部 | 'repo' | 'global'
+
+/**
+ * 规范有两个作用域，必须都看得见：
+ *   repo   —— 本仓库规范，同步到项目 CLAUDE.md
+ *   global —— 通用规范，同步到用户级 ~/.claude/CLAUDE.md，**每个会话都加载**
+ * 只显示本仓库的话，真正在生效的那批反而是隐形的。
+ */
+function scopeChips(items) {
+  const n = { repo: 0, global: 0 };
+  for (const it of items) n[it.scope] = (n[it.scope] || 0) + 1;
+  if (!n.repo || !n.global) return '';    // 只有一种作用域就不占地方
+  const c = (k, label) =>
+    `<button class="chip ${scopeFilter === k ? 'on' : ''}" onclick="setScope2(${k ? `'${k}'` : 'null'})">${label}</button>`;
+  return `<div class="chips" style="margin-bottom:7px">
+    ${c(null, '全部 ' + items.length)}${c('repo', '本仓库 ' + n.repo)}${c('global', '通用 ' + n.global)}
+  </div>`;
+}
+
+function setScope2(k) { scopeFilter = (scopeFilter === k) ? null : k; render(); }
+
+const byScope = (items) => scopeFilter ? items.filter((i) => i.scope === scopeFilter) : items;
+
+const scopePill = (it) => it.scope === 'global'
+  ? `<span class="pill dim" style="margin-left:5px">通用</span>` : '';
 
 /* ── 标签 ── */
 let tagFilter = null;
@@ -446,17 +473,19 @@ function panel() {
   const d = D, s = d.stats;
   if (tab === 'conv') {
     if (!d.conventions.length) return `<div class="empty">还没有已确认的规范</div>`;
-    const items = byTag(d.conventions);
+    const scoped = byScope(d.conventions);
     return `<div style="margin-bottom:9px"><button onclick="sync(false)">同步到项目 CLAUDE.md</button>
       <button onclick="sync(true)">同步到用户级 CLAUDE.md</button>
-      <span class="hint" style="margin-left:8px">写进 CLAUDE.md 时也会按技术域分组</span></div>`
-      + tagChips(d.conventions)
-      + grouped(items, c => `<div class="card"><div class="rule">${esc(c.rule)}</div>${tagLine(c)}</div>`);
+      <span class="hint" style="margin-left:8px">「通用」那批写在 ~/.claude/CLAUDE.md，每个会话都加载</span></div>`
+      + scopeChips(d.conventions) + tagChips(scoped)
+      + grouped(byTag(scoped), c =>
+          `<div class="card"><div class="rule">${esc(c.rule)}${scopePill(c)}</div>${tagLine(c)}</div>`);
   }
   if (tab === 'pit') {
     if (!d.pitfalls.length) return `<div class="empty">还没有踩坑记录</div>`;
-    return tagChips(d.pitfalls) + grouped(byTag(d.pitfalls), p =>
-      `<div class="card"><div class="rule">${esc(p.rule)}</div>
+    const sp = byScope(d.pitfalls);
+    return scopeChips(d.pitfalls) + tagChips(sp) + grouped(byTag(sp), p =>
+      `<div class="card"><div class="rule">${esc(p.rule)}${scopePill(p)}</div>
         <div class="meta" style="margin:7px 0 0"><span>${esc(base(p.file))}</span></div>${tagLine(p)}</div>`);
   }
   if (tab === 'cand') {
@@ -477,11 +506,11 @@ function panel() {
         <span>命中率 ${(s.hitRate * 100).toFixed(0)}%</span></div>
       <div class="hint" style="margin-top:6px">规范入库后，同类人工修正应当下降。注入次数为 0 时不能下结论 —— 要能区分"规范没用"和"注入没生效"。</div>
     </div>`
-    + tagChips(s.rules)
-    + grouped(byTag(s.rules), r => {
+    + scopeChips(s.rules) + tagChips(byScope(s.rules))
+    + grouped(byTag(byScope(s.rules)), r => {
       const cls = r.verdict.startsWith('✅') ? 'ok' : r.verdict.startsWith('🟡') ? 'warn'
                 : r.verdict.startsWith('❌') ? 'bad' : 'dim';
-      return `<div class="card"><div class="rule">${esc(r.rule)}</div>
+      return `<div class="card"><div class="rule">${esc(r.rule)}${scopePill(r)}</div>
         <div class="meta" style="margin:8px 0 0">
           <span>入库前 ${r.before} 次 → 入库后 ${r.after} 次</span>
           <span>注入 ${r.injected} 次</span></div>

@@ -24,6 +24,10 @@ const batch = require('./batch');
  *      核心是修正复发率，这是项目唯一的效果指标。
  */
 const PORT = Number(process.env.AGENT_LORE_PORT || 4519);
+const GLOBAL = '_global';   // 工具级/环境级规范的作用域，同步到用户级 ~/.claude/CLAUDE.md
+
+const lines = (md) => (md || '').split(String.fromCharCode(10))
+  .filter((l) => l.startsWith('- ')).map((l) => l.slice(2));
 
 function data(cwd) {
   const repo = repoId(cwd);
@@ -38,6 +42,7 @@ function data(cwd) {
     if (hit) groups.get(hit).push(c); else groups.set(c.key, [c]);
   }
   const existing = store.getConventions(repo);
+  const globalConv = repo === GLOBAL ? '' : store.getConventions(GLOBAL);
   const pendingRules = [...groups.entries()]
     .filter(([k]) => !existing.includes('id=' + k))
     .map(([key, g]) => ({
@@ -52,8 +57,18 @@ function data(cwd) {
     // 边界按会话隔离：同一仓库可能同时有多个会话在做不同需求
     specs: spec.list(cwd),
     sessions: spec.sessions(cwd),
-    conventions: withTags(existing.split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2))),
-    pitfalls: withTags(store.allPitfalls(repo).map((p) => ({ file: p.file, rule: p.rule, at: p.at }))),
+    // 规范有两个作用域：本仓库 + 通用(_global)。
+    // 通用规范写在用户级 CLAUDE.md、每个会话都加载，是真正在生效的那批 ——
+    // 只显示本仓库的话，它们在看板上完全看不见。
+    conventions: [
+      ...withTags(lines(existing)).map((c) => ({ ...c, scope: 'repo' })),
+      ...withTags(lines(globalConv)).map((c) => ({ ...c, scope: 'global' })),
+    ],
+    pitfalls: [
+      ...withTags(store.allPitfalls(repo).map((p) => ({ file: p.file, rule: p.rule, at: p.at, scope: 'repo' }))),
+      ...(repo === GLOBAL ? []
+        : withTags(store.allPitfalls(GLOBAL).map((p) => ({ file: p.file, rule: p.rule, at: p.at, scope: 'global' })))),
+    ],
     // 归因单位是「一次交互」不是「一个文件的 diff」——见 src/batch.js
     batches: batch.groupPending(store.listPending(repo)),
     pendingCount: store.listPending(repo).length,
@@ -61,7 +76,13 @@ function data(cwd) {
     autoRule: TUNING.autoPromote,
     hasApiKey: !!process.env.ANTHROPIC_API_KEY,
     candidates: pendingRules,
-    stats: { ...s, rules: withTags(s.rules) },
+    stats: {
+      ...s,
+      rules: [
+        ...withTags(s.rules).map((r) => ({ ...r, scope: 'repo' })),
+        ...(repo === GLOBAL ? [] : withTags(metrics.stats(GLOBAL).rules).map((r) => ({ ...r, scope: 'global' }))),
+      ],
+    },
     tagLabels: tags.LABEL,
   };
 }
