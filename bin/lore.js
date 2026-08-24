@@ -1,0 +1,164 @@
+#!/usr/bin/env node
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const { TUNING, HOME } = require('../src/config');
+const { repoId } = require('../src/util');
+const store = require('../src/store');
+const detect = require('../src/detect');
+const attribute = require('../src/attribute');
+const promote = require('../src/promote');
+const inject = require('../src/inject');
+const metrics = require('../src/metrics');
+
+const cwd = process.cwd();
+const [, , cmd, ...rest] = process.argv;
+const arg = (n, d) => { const i = rest.indexOf('--' + n); return i >= 0 ? rest[i + 1] : d; };
+const has = (n) => rest.includes('--' + n);
+
+const CMDS = {
+  // —— 采集 ——
+  snapshot() {                     // lore snapshot <file>   （由 PostToolUse hook 调用）
+    const file = rest[0];
+    if (!file) return die('用法: lore snapshot <file>');
+    let content;
+    try { content = fs.readFileSync(file, 'utf8'); } catch { return; }  // 读不到就静默放过
+    if (Buffer.byteLength(content) > TUNING.maxFileBytes) return;
+    store.putSnapshot(repoId(cwd), path.resolve(file), content);
+  },
+
+  scan() {                         // lore scan   检测人类修正
+    const { repo, found } = detect.scan(cwd);
+    const real = found.filter((f) => !f.skipped);
+    const skipped = found.filter((f) => f.skipped);
+    console.log(`仓库 ${repo}：发现 ${real.length} 处人工修正` +
+      (skipped.length ? `，${skipped.length} 处超出 ${TUNING.windowMinutes} 分钟采集窗已跳过` : ''));
+    for (const r of real) console.log(`  ${r.id}  ${path.relative(cwd, r.file)}  (${r.hunkCount} 处改动, AI 写完 ${r.ageMin} 分钟后)`);
+    if (real.length) console.log(`\n下一步：lore review   ← 输出归因提示词`);
+  },
+
+  // —— 归因 ——
+  review() {                       // lore review   打印分类提示词，交给当前 harness 里的模型
+    const repo = repoId(cwd);
+    const pending = store.listPending(repo);
+    if (!pending.length) return console.log('没有待归因的修正。先跑 lore scan');
+    console.log(attribute.buildPrompt(pending));
+    console.log(`\n---\n把每行 JSON 回灌：  lore learn --json '<那一行>'`);
+  },
+
+  async auto() {                   // lore auto   有 ANTHROPIC_API_KEY 时无人值守归因
+    const key = process.env.ANTHROPIC_API_KEY;
+    if (!key) return die('需要 ANTHROPIC_API_KEY。没有 key 就用 lore review（零配置路径）');
+    const repo = repoId(cwd);
+    const pending = store.listPending(repo);
+    if (!pending.length) return console.log('没有待归因的修正');
+    const verdicts = await attribute.classifyViaApi(pending, key, arg('model', 'claude-sonnet-5'));
+    for (const v of verdicts) applyVerdict(repo, v);
+  },
+
+  learn() {                        // lore learn --json '{...}'
+    const raw = arg('json');
+    if (!raw) return die(`用法: lore learn --json '{"id":"..","label":"style","confidence":0.9,"rule":".."}'`);
+    let v; try { v = JSON.parse(raw); } catch { return die('JSON 解析失败'); }
+    applyVerdict(repoId(cwd), v);
+  },
+
+  // —— 升格 ——
+  promote() {                      // lore promote   列出达阈值的规范，--yes 确认入库
+    const repo = repoId(cwd);
+    const ready = promote.readyToPromote(repo);
+    if (!ready.length) {
+      const cands = store.listCandidates(repo).filter((c) => c.label === 'style');
+      return console.log(`没有达到阈值(${TUNING.promoteThreshold}次)的规范。当前候选 ${cands.length} 条`);
+    }
+    for (const r of ready) {
+      console.log(`\n[${r.key}] 累计 ${r.count} 次  涉及 ${r.files.length} 个文件`);
+      console.log(`  规范：${r.rule}`);
+    }
+    if (!has('yes')) return console.log(`\n⚠️ 人工确认闸：确认无误后跑  lore promote --yes`);
+    for (const r of ready) {
+      store.addConvention(repo, r.rule, r);
+      store.recordMetric({ type: 'promote', repo, key: r.key, rule: r.rule });
+      console.log(`✅ 已入库 ${r.key}`);
+    }
+    console.log(`\n下一步：lore sync   ← 写进项目 CLAUDE.md（规范走常驻，不走检索）`);
+  },
+
+  sync() {                         // lore sync   convention → 项目 CLAUDE.md
+    const r = inject.syncClaudeMd(cwd);
+    console.log(r.written ? `✅ ${r.count} 条规范已写入 ${r.target}` : `跳过：${r.reason}`);
+  },
+
+  // —— 注入 ——
+  inject() {                       // lore inject <file>   （由 PreToolUse hook 调用）
+    const file = rest[0];
+    if (!file) return die('用法: lore inject <file>');
+    let ctx = null;
+    try { ctx = inject.buildContext(cwd, path.resolve(file)); } catch { /* fail-open */ }
+    if (!ctx) return;              // ← 未命中：什么都不输出，零 token
+    store.recordMetric({ type: 'inject', repo: ctx.repo, file, keys: ctx.keys, tokens: ctx.tokens });
+    process.stdout.write(ctx.text);
+  },
+
+  // —— 观测 ——
+  stats() {
+    const s = metrics.stats();
+    console.log(`注入次数 ${s.totalInjects}   累计注入 ${s.totalInjectedTokens} token   命中率 ${(s.hitRate * 100).toFixed(0)}%`);
+    if (!s.rules.length) return console.log('还没有已入库的规范');
+    console.log('\n修正复发率：');
+    for (const r of s.rules) {
+      console.log(`  [${r.key}] 入库前 ${r.before} 次 → 入库后 ${r.after} 次  (注入 ${r.injected} 次)  ${r.verdict}`);
+      console.log(`     ${r.rule}`);
+    }
+  },
+
+  list() {
+    const repo = repoId(cwd);
+    console.log(`# ${repo}\n`);
+    console.log(store.getConventions(repo) || '(暂无已确认规范)');
+    const pits = store.allPitfalls(repo);
+    console.log(`\n踩坑记录 ${pits.length} 条`);
+    for (const p of pits.slice(0, 20)) console.log(`  - [${path.basename(p.file)}] ${p.rule}`);
+  },
+
+  watch() { require('../src/watch').watch(cwd, { intervalMs: Number(arg('interval', 5)) * 1000 }); },
+
+  where() { console.log(HOME); },
+
+  help() {
+    console.log(`agent-lore —— 从人类修正里学习仓库规范
+
+采集   lore snapshot <file>   记录 agent 写入（hook 调用）
+       lore scan              检测人类修正
+归因   lore review            输出归因提示词（零配置，交给当前 harness 的模型）
+       lore learn --json '..' 回灌归因结果
+       lore auto              有 ANTHROPIC_API_KEY 时自动归因
+升格   lore promote [--yes]   达阈值的规范入库（人工确认闸）
+       lore sync              规范 → 项目 CLAUDE.md（常驻，不走检索）
+注入   lore inject <file>     输出相关踩坑（hook 调用；未命中零输出）
+观测   lore stats             修正复发率
+       lore list              查看已学到的东西
+       lore where             知识库位置
+
+调参   ${JSON.stringify(TUNING, null, 2).split('\n').join('\n       ')}`);
+  },
+};
+
+function applyVerdict(repo, v) {
+  const gate = attribute.accept(v);
+  if (!gate.ok) { console.log(`⊘ ${v.id} 丢弃：${gate.why}`); store.markClassified(repo, v.id); return; }
+  const src = store.listPending(repo).find((p) => p.id === v.id) || { file: '?', diff: '' };
+  const res = promote.record(repo, v, src);
+  store.markClassified(repo, v.id);
+  store.recordMetric({ type: 'correction', repo, key: res.key || promote.ruleKey(v.rule), rule: v.rule, file: src.file });
+  if (res.kind === 'pitfall') console.log(`✅ 踩坑已记录：${res.rule}`);
+  else console.log(`📌 规范候选 ${res.count}/${res.threshold}：${res.rule}` +
+    (res.count >= res.threshold ? '  ← 已达阈值，跑 lore promote' : ''));
+}
+
+function die(msg) { console.error(msg); process.exitCode = 1; }
+
+(async () => {
+  const fn = CMDS[cmd] || CMDS.help;
+  try { await fn(); } catch (e) { die('错误: ' + e.message); }
+})();

@@ -1,0 +1,9 @@
+{
+  "name": "agent-lore",
+  "version": "0.1.0",
+  "description": "让 AI 编码工具从人类的修正里自动学习仓库规范。harness 扩展层，零依赖。",
+  "bin": { "lore": "./bin/lore.js" },
+  "engines": { "node": ">=18" },
+  "license": "MIT",
+  "keywords": ["ai-coding", "agent", "mcp", "claude-code", "convention", "self-learning"]
+}
