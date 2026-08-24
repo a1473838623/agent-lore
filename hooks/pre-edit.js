@@ -20,7 +20,10 @@ process.stdin.on('end', () => {
     const ev = JSON.parse(raw || '{}');
     const fp = ev.tool_input && (ev.tool_input.file_path || ev.tool_input.filePath);
     if (fp) {
-      text = execFileSync(process.execPath, [path.join(__dirname, '..', 'bin', 'lore.js'), 'inject', fp],
+      const args = [path.join(__dirname, '..', 'bin', 'lore.js'), 'inject', fp];
+      // 带上 session_id：同一仓库可能有多个会话在做不同需求，边界必须按会话隔离
+      if (ev.session_id) args.push('--session', ev.session_id);
+      text = execFileSync(process.execPath, args,
         { cwd: ev.cwd || process.cwd(), encoding: 'utf8', timeout: 3000 }).trim();
     }
   } catch { /* fail-open */ }

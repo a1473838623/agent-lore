@@ -7,10 +7,12 @@ const { ensureDir, sha1, readIfExists, appendJsonl, readJsonl } = require('./uti
 const snapFile = (repo, file) => path.join(DIRS.snapshot, repo, sha1(file) + '.json');
 
 /** 记录 agent 写入后的文件状态。这是"人类修正"的比较基准 */
-function putSnapshot(repo, file, content) {
+function putSnapshot(repo, file, content, sessionId) {
   const p = snapFile(repo, file);
   ensureDir(path.dirname(p));
-  fs.writeFileSync(p, JSON.stringify({ file, content, at: Date.now(), by: 'agent' }), 'utf8');
+  // 记 sessionId 是为了把同一次交互里改的多个文件聚成一个归因批次：
+  // 一次需求改动常横跨多文件，逐个文件归因既重复、模型又缺跨文件上下文
+  fs.writeFileSync(p, JSON.stringify({ file, content, at: Date.now(), by: 'agent', sessionId }), 'utf8');
 }
 
 function getSnapshot(repo, file) {

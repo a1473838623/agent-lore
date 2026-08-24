@@ -105,6 +105,14 @@ nav.tabs button:hover{color:var(--fg)}
 .bar{height:4px;background:var(--line2);border-radius:3px;overflow:hidden;margin-top:7px}
 .bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
 
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:11px}
+.chip{border:1px solid var(--line);background:var(--panel);color:var(--dim);
+  border-radius:20px;padding:3px 11px;font-size:12px}
+.chip:hover{color:var(--fg)}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.grp{font-size:11.5px;color:var(--faint);letter-spacing:.5px;text-transform:uppercase;
+  margin:14px 0 7px;font-weight:600;display:flex;align-items:center;gap:7px}
+.grp:first-child{margin-top:0}
 .empty{color:var(--faint);font-size:13px;padding:22px;text-align:center;
   border:1px dashed var(--line);border-radius:10px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--fg);
@@ -146,8 +154,9 @@ let lastSig = null;
 /** 数据指纹：只取会影响渲染的部分，避免时间戳之类的噪声导致假变化 */
 function signature(d) {
   return JSON.stringify([
-    d.repo, d.spec && d.spec.id, d.conventions, d.pitfalls.map(p => p.rule),
-    d.pending.map(p => p.id), d.ready.map(r => r.key + r.count),
+    d.repo, d.specs.map(s => s.sessionId + s.id), d.sessions.map(s => s.id),
+    d.conventions.map(c => c.rule), d.pitfalls.map(p => p.rule),
+    d.batches.map(b => b.id + b.items.length), d.ready.map(r => r.key + r.count),
     d.candidates.map(c => c.key + c.count), d.stats.totalInjects, d.stats.totalInjectedTokens,
     d.stats.rules.map(r => r.key + r.before + r.after + r.injected),
   ]);
@@ -183,7 +192,7 @@ async function load(force) {
 /* ────────── 渲染 ────────── */
 function render() {
   const d = D, s = d.stats;
-  const todo = d.pending.length + d.ready.length;
+  const todo = d.pendingCount + d.ready.length;
 
   const H = [];
   H.push(`<header>
@@ -193,18 +202,7 @@ function render() {
     <button class="ghost" onclick="load(true)">刷新</button>
   </header>`);
 
-  // 需求边界
-  H.push(d.spec ? `<div class="scope">
-      <div class="t">🎯 ${esc(d.spec.id)}</div>
-      ${d.spec.scope ? `<div class="l">范围内：${esc(d.spec.scope)}</div>` : ''}
-      ${(d.spec.out || []).length ? `<div class="l">不在范围：${esc(d.spec.out.join('；'))}</div>` : ''}
-      <div style="margin-top:8px"><button class="ghost" onclick="clearScope()">结束这个需求</button></div>
-    </div>`
-    : `<div class="scope-set">
-      <input id="spec-id" placeholder="当前需求（例：REQ-118 payment callback idempotency）">
-      <input id="spec-scope" placeholder="范围内做什么">
-      <button onclick="setScope()">设边界</button>
-    </div>`);
+  H.push(scopeSection(d));
 
   // 状态条
   H.push(`<div class="stats">
@@ -221,15 +219,15 @@ function render() {
     H.push(`<section><h2 class="todo">待确认入库 <span class="n">${d.ready.length}</span></h2>
       ${d.ready.map(readyCard).join('')}</section>`);
   }
-  if (d.pending.length) {
-    H.push(`<section><h2 class="todo">待归因 <span class="n">${d.pending.length}</span>
+  if (d.batches.length) {
+    H.push(`<section><h2 class="todo">待归因 <span class="n">${d.batches.length} 次交互 · ${d.pendingCount} 个文件</span>
         <span style="flex:1"></span>
         <button class="primary" onclick="autoAll()" ${d.hasApiKey ? '' : 'disabled'}>⚡ 全部自动归因</button>
       </h2>
       ${d.hasApiKey ? '' : `<div class="hint" style="margin:-2px 0 9px">
         自动归因需要设置 ANTHROPIC_API_KEY 环境变量。没有 key 时用
         <code>lore review</code> 把提示词交给当前 harness 里的模型判断，再回灌结果。</div>`}
-      ${d.pending.map(pendingCard).join('')}</section>`);
+      ${d.batches.map(batchCard).join('')}</section>`);
   }
 
   // ── 观测：tabs ──
@@ -249,40 +247,167 @@ function render() {
 const stat = (v, label, hot) =>
   `<div class="stat${hot ? ' hot' : ''}"><b>${v}</b><span>${label}</span></div>`;
 
+/**
+ * 需求边界区 —— 按会话分别设置。
+ *
+ * 同一个仓库可能同时开着多个会话做不同需求。只留一个全局输入框，
+ * B 会话会被注入 A 的边界然后拒绝干活，而且这种串扰很隐蔽。
+ * hook 事件里带 session_id，所以按会话隔离；没有会话时退回"仓库默认"。
+ */
+function scopeSection(d) {
+  const ago = (t) => {
+    const m = Math.round((Date.now() - t) / 60000);
+    return m < 1 ? '刚刚' : m < 60 ? m + ' 分钟前' : Math.round(m / 60) + ' 小时前';
+  };
+  const rows = [];
+
+  // 每个最近活跃的会话一行
+  for (const s of d.sessions) {
+    rows.push(s.spec
+      ? `<div class="scope">
+          <div class="t">🎯 ${esc(s.spec.id)}
+            <span class="pill dim" style="margin-left:6px">会话 ${esc(s.short)} · ${ago(s.at)}</span></div>
+          ${s.spec.scope ? `<div class="l">范围内：${esc(s.spec.scope)}</div>` : ''}
+          ${(s.spec.out || []).length ? `<div class="l">不在范围：${esc(s.spec.out.join('；'))}</div>` : ''}
+          <div style="margin-top:8px"><button class="ghost" onclick="clearScope('${esc(s.id)}')">结束这个需求</button></div>
+        </div>`
+      : `<div class="scope-set">
+          <span class="pill dim" style="align-self:center;white-space:nowrap">会话 ${esc(s.short)} · ${ago(s.at)}</span>
+          <input id="si-${esc(s.id)}" placeholder="这个会话在做什么需求">
+          <input id="ss-${esc(s.id)}" placeholder="范围内做什么">
+          <button onclick="setScope('${esc(s.id)}')">设边界</button>
+        </div>`);
+  }
+
+  // 仓库默认边界：没匹配到会话时兜底（比如从 CLI 设的，或 harness 不给 session_id）
+  const def = d.specs.find((s) => !s.sessionId);
+  rows.push(def
+    ? `<div class="scope">
+        <div class="t">🎯 ${esc(def.id)} <span class="pill dim" style="margin-left:6px">仓库默认</span></div>
+        ${def.scope ? `<div class="l">范围内：${esc(def.scope)}</div>` : ''}
+        <div style="margin-top:8px"><button class="ghost" onclick="clearScope()">结束这个需求</button></div>
+      </div>`
+    : `<div class="scope-set">
+        <span class="pill dim" style="align-self:center;white-space:nowrap">仓库默认</span>
+        <input id="si-" placeholder="需求（例：REQ-118 payment callback idempotency）">
+        <input id="ss-" placeholder="范围内做什么">
+        <button onclick="setScope()">设边界</button>
+      </div>`);
+
+  if (!d.sessions.length) {
+    rows.push(`<div class="hint" style="margin:-6px 0 12px">
+      还没记录到活跃会话。agent 编辑过文件之后，这里会按会话分别列出，可以给每个会话单独设边界。</div>`);
+  }
+  return rows.join('');
+}
+
+/* ── 标签 ── */
+let tagFilter = null;
+
+function tagChips(items) {
+  const counts = new Map();
+  for (const it of items) counts.set(it.tag, (counts.get(it.tag) || 0) + 1);
+  if (counts.size < 2) return '';
+  const L = D.tagLabels || {};
+  const chips = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return `<div class="chips">
+    <button class="chip ${tagFilter ? '' : 'on'}" onclick="setTag(null)">全部 ${items.length}</button>
+    ${chips.map(([t, n]) =>
+      `<button class="chip ${tagFilter === t ? 'on' : ''}" onclick="setTag('${t}')">${esc(L[t] || t)} ${n}</button>`
+    ).join('')}</div>`;
+}
+
+function setTag(t) { tagFilter = (tagFilter === t) ? null : t; render(); }
+
+const byTag = (items) => tagFilter ? items.filter((i) => i.tag === tagFilter) : items;
+
+/** 按标签分组渲染。未筛选时按组显示小标题；已筛选时直接平铺 */
+function grouped(items, cardFn) {
+  const L = D.tagLabels || {};
+  if (tagFilter) return items.map(cardFn).join('');
+  const m = new Map();
+  for (const it of items) { if (!m.has(it.tag)) m.set(it.tag, []); m.get(it.tag).push(it); }
+  return [...m.entries()]
+    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    .map(([t, g]) => `<div class="grp">${esc(L[t] || t)} <span class="pill dim">${g.length}</span></div>`
+      + g.map(cardFn).join('')).join('');
+}
+
 function diffHtml(t) {
   return '<pre class="diff">' + String(t).split('\n').map(l =>
     `<div class="${l.startsWith('+') ? 'a' : l.startsWith('-') ? 'd' : ''}">${esc(l) || '&nbsp;'}</div>`
   ).join('') + '</pre>';
 }
 
-/* 待归因卡片 —— 三个按钮 + 就地填 rule，不用回命令行 */
-function pendingCard(p) {
-  return `<div class="card act" id="c-${p.id}">
-    <div class="meta"><span>${esc(base(p.file))}</span><span>${p.hunks} 处改动</span>
-      <span>AI 写完 ${p.ageMin} 分钟后被改</span><span>${esc(p.id)}</span></div>
-    ${diffHtml(p.diff)}
-    <div class="acts">
-      <button class="primary" onclick="pick('${p.id}','style')">🎨 规范修正</button>
-      <button onclick="pick('${p.id}','bug')">🐛 修复缺陷</button>
-      <button class="ghost" onclick="drop('${p.id}')">📦 业务变更 · 丢弃</button>
+/**
+ * 待归因卡片 —— 单位是**一次交互**，不是一个文件的 diff。
+ *
+ * 一次需求改动常横跨多个文件，逐个文件归因既重复、模型又缺跨文件上下文。
+ * 所以按 (session_id + 时间邻近) 聚成批次，整批一次判断。
+ * 计数上一个批次只算一次证据 —— 否则单次交互就能顶到升格阈值。
+ */
+let splitOpen = {};   // 批次 id → 是否展开成逐条
+
+function batchCard(b) {
+  const single = b.items.length === 1;
+  const files = b.items.map((it, i) => `
+    <div style="margin-top:${i ? 10 : 8}px">
+      <div class="meta" style="margin-bottom:4px">
+        <span>${esc(base(it.file))}</span><span>${it.hunkCount} 处改动</span>
+        ${splitOpen[b.id] ? `<button class="ghost" style="padding:0 6px;font-size:11px"
+          onclick="pickOne('${it.id}','style')">单独归因</button>
+          <button class="ghost" style="padding:0 6px;font-size:11px"
+          onclick="drop('${it.id}')">单独丢弃</button>` : ''}
+      </div>
+      ${diffHtml(it.diff)}
+      ${splitOpen[b.id] ? oneForm(it.id) : ''}
+    </div>`).join('');
+
+  return `<div class="card act" id="c-${b.id}">
+    <div class="meta">
+      <span><b style="color:var(--fg)">${b.items.length} 个文件</b></span>
+      <span>共 ${b.hunks} 处改动</span>
+      <span>AI 写完 ${b.ageMin} 分钟后被改</span>
+      ${b.sessionId ? `<span>会话 ${esc(String(b.sessionId).slice(0, 8))}</span>` : '<span>无会话信息</span>'}
     </div>
-    <div class="form" id="f-${p.id}">
-      <label id="l-${p.id}"></label>
-      <textarea id="r-${p.id}" oninput="dirty=true"
+    ${files}
+    <div class="acts">
+      <button class="primary" onclick="pick('${b.id}','style')">🎨 规范修正</button>
+      <button onclick="pick('${b.id}','bug')">🐛 修复缺陷</button>
+      <button class="ghost" onclick="dropBatch('${b.id}')">📦 业务变更 · 丢弃整批</button>
+      ${single ? '' : `<span style="flex:1"></span>
+        <button class="ghost" onclick="toggleSplit('${b.id}')">${
+          splitOpen[b.id] ? '合起来整批处理' : '这批不是同一件事 · 拆开'}</button>`}
+    </div>
+    <div class="form" id="f-${b.id}">
+      <label id="l-${b.id}"></label>
+      <textarea id="r-${b.id}" oninput="dirty=true"
         placeholder="Write the rule in English, e.g. Inject Spring bean dependencies via constructor, not @Autowired field injection"></textarea>
       <div class="row">
-        <select id="cf-${p.id}">
-          <option value="0.95">很确定</option>
-          <option value="0.85" selected>比较确定</option>
-          <option value="0.6">不太确定（低于闸门 ${D.stats && 0.75}，会被丢弃）</option>
-        </select>
-        <button class="primary" onclick="submit('${p.id}')">提交</button>
-        <button class="ghost" onclick="cancel('${p.id}')">取消</button>
+        ${confSelect(b.id)}
+        <button class="primary" onclick="submitBatch('${b.id}')">提交${single ? '' : `（整批算 1 次证据）`}</button>
+        <button class="ghost" onclick="cancel('${b.id}')">取消</button>
         <span class="hint">写成可复用的一般陈述，不要提具体变量名</span>
       </div>
     </div>
   </div>`;
 }
+
+const confSelect = (id) => `<select id="cf-${id}">
+  <option value="0.95">很确定</option>
+  <option value="0.85" selected>比较确定</option>
+  <option value="0.6">不太确定（低于闸门，会被丢弃）</option>
+</select>`;
+
+const oneForm = (id) => `<div class="form" id="f-${id}" style="margin-top:8px">
+  <label id="l-${id}"></label>
+  <textarea id="r-${id}" oninput="dirty=true" placeholder="Write the rule in English"></textarea>
+  <div class="row">${confSelect(id)}
+    <button class="primary" onclick="submitOne('${id}')">提交这一条</button>
+    <button class="ghost" onclick="cancel('${id}')">取消</button></div>
+</div>`;
+
+function toggleSplit(id) { splitOpen[id] = !splitOpen[id]; render(); }
 
 /* 达阈值但没够格自动入库的 —— 必须说清楚"为什么还要问你" */
 function readyCard(r) {
@@ -312,18 +437,27 @@ function readyCard(r) {
   </div>`;
 }
 
+const tagLine = (it) => (it.tags || []).length > 1
+  ? `<div style="margin-top:7px">${it.tags.map(t =>
+      `<span class="pill dim" style="margin-right:4px">${esc((D.tagLabels || {})[t] || t)}</span>`).join('')}</div>`
+  : '';
+
 function panel() {
   const d = D, s = d.stats;
   if (tab === 'conv') {
     if (!d.conventions.length) return `<div class="empty">还没有已确认的规范</div>`;
+    const items = byTag(d.conventions);
     return `<div style="margin-bottom:9px"><button onclick="sync(false)">同步到项目 CLAUDE.md</button>
-      <button onclick="sync(true)">同步到用户级 CLAUDE.md</button></div>` +
-      d.conventions.map(c => `<div class="card"><div class="rule">${esc(c)}</div></div>`).join('');
+      <button onclick="sync(true)">同步到用户级 CLAUDE.md</button>
+      <span class="hint" style="margin-left:8px">写进 CLAUDE.md 时也会按技术域分组</span></div>`
+      + tagChips(d.conventions)
+      + grouped(items, c => `<div class="card"><div class="rule">${esc(c.rule)}</div>${tagLine(c)}</div>`);
   }
   if (tab === 'pit') {
     if (!d.pitfalls.length) return `<div class="empty">还没有踩坑记录</div>`;
-    return d.pitfalls.map(p => `<div class="card"><div class="rule">${esc(p.rule)}</div>
-      <div class="meta" style="margin:7px 0 0"><span>${esc(base(p.file))}</span></div></div>`).join('');
+    return tagChips(d.pitfalls) + grouped(byTag(d.pitfalls), p =>
+      `<div class="card"><div class="rule">${esc(p.rule)}</div>
+        <div class="meta" style="margin:7px 0 0"><span>${esc(base(p.file))}</span></div>${tagLine(p)}</div>`);
   }
   if (tab === 'cand') {
     if (!d.candidates.length) return `<div class="empty">还没有候选规范。候选累计 ${d.threshold} 次才会升格</div>`;
@@ -342,16 +476,19 @@ function panel() {
         <span>累计 ${s.totalInjectedTokens} token</span>
         <span>命中率 ${(s.hitRate * 100).toFixed(0)}%</span></div>
       <div class="hint" style="margin-top:6px">规范入库后，同类人工修正应当下降。注入次数为 0 时不能下结论 —— 要能区分"规范没用"和"注入没生效"。</div>
-    </div>` +
-    s.rules.map(r => {
+    </div>`
+    + tagChips(s.rules)
+    + grouped(byTag(s.rules), r => {
       const cls = r.verdict.startsWith('✅') ? 'ok' : r.verdict.startsWith('🟡') ? 'warn'
                 : r.verdict.startsWith('❌') ? 'bad' : 'dim';
       return `<div class="card"><div class="rule">${esc(r.rule)}</div>
         <div class="meta" style="margin:8px 0 0">
           <span>入库前 ${r.before} 次 → 入库后 ${r.after} 次</span>
           <span>注入 ${r.injected} 次</span></div>
-        <div style="margin-top:7px"><span class="pill ${cls}">${esc(r.verdict)}</span></div></div>`;
-    }).join('');
+        <div style="margin-top:7px"><span class="pill ${cls}">${esc(r.verdict)}</span>${
+          (r.tags || []).map(t => `<span class="pill dim" style="margin-left:4px">${
+            esc((D.tagLabels || {})[t] || t)}</span>`).join('')}</div></div>`;
+    });
 }
 
 /* ────────── 交互 ────────── */
@@ -373,8 +510,19 @@ function cancel(id) {
   dirty = false;
 }
 
-async function submit(id) {
-  const f = document.getElementById('f-' + id);
+async function submitBatch(bid) {
+  const b = D.batches.find(x => x.id === bid);
+  if (!b) return;
+  await doSubmit(bid, b.items.map(i => i.id));
+}
+
+async function submitOne(id) { await doSubmit(id, [id]); }
+
+function pickOne(id, label) { pick(id, label); }
+
+async function doSubmit(formId, ids) {
+  const f = document.getElementById('f-' + formId);
+  const id = formId;
   const rule = document.getElementById('r-' + id).value.trim();
   if (!rule) return toast('先写一句规范');
 
@@ -383,12 +531,13 @@ async function submit(id) {
   const raw = Number(document.getElementById('cf-' + id).value);
   const confidence = Number.isFinite(raw) && raw > 0 ? raw : 0.85;
 
-  const r = await post('/api/learn', { id, label: f.dataset.label, rule, confidence });
+  const r = await post('/api/learn', { ids, label: f.dataset.label, rule, confidence });
   dirty = false;
   const auto = (r.autoPromoted || []).length;
   toast(!r.ok ? '已丢弃：' + r.why
       : r.kind === 'pitfall' ? '已记为踩坑'
       : `规范候选 ${r.count}/${r.threshold}`
+        + (r.batchSize > 1 ? `（${r.batchSize} 个文件算 1 次）` : '')
         + (r.count >= r.threshold ? ' · 已达阈值' : '')
         + (auto ? ` · ${auto} 条已自动入库` : ''));
   load(true);
@@ -408,6 +557,13 @@ async function autoAll() {
 
 async function drop(id) { await post('/api/dismiss', { id }); dirty = false; toast('已丢弃'); load(true); }
 
+async function dropBatch(bid) {
+  const b = D.batches.find(x => x.id === bid);
+  if (!b) return;
+  await post('/api/dismiss', { ids: b.items.map(i => i.id) });
+  dirty = false; toast(`已丢弃 ${b.items.length} 个文件`); load(true);
+}
+
 async function confirmRule(key) {
   const r = await post('/api/promote', { key });
   toast(r.ok ? '已入库' : r.why); load(true);
@@ -425,14 +581,21 @@ async function scanNow() {
   load(true);
 }
 
-async function setScope() {
-  const id = $('#spec-id').value.trim();
+async function setScope(sessionId) {
+  const suffix = sessionId || '';
+  const id = document.getElementById('si-' + suffix).value.trim();
   if (!id) return toast('先填需求名');
-  await post('/api/spec', { id, scope: $('#spec-scope').value.trim(), out: [] });
-  toast('边界已设置，之后每次编辑前都会注入'); load(true);
+  await post('/api/spec', {
+    id, scope: document.getElementById('ss-' + suffix).value.trim(), out: [], sessionId: sessionId || null,
+  });
+  toast(sessionId ? '边界已设置，只对这个会话生效' : '仓库默认边界已设置');
+  load(true);
 }
 
-async function clearScope() { await post('/api/spec', { clear: true }); toast('已结束'); load(true); }
+async function clearScope(sessionId) {
+  await post('/api/spec', { clear: true, sessionId: sessionId || null });
+  toast('已结束'); load(true);
+}
 
 load(true);
 setInterval(() => load(false), 5000);

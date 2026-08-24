@@ -11,6 +11,8 @@ const spec = require('./spec');
 const apply = require('./apply');
 const injectMod = require('./inject');
 const detect = require('./detect');
+const tags = require('./tags');
+const batch = require('./batch');
 
 /**
  * 本地看板。
@@ -25,7 +27,7 @@ const PORT = Number(process.env.AGENT_LORE_PORT || 4519);
 
 function data(cwd) {
   const repo = repoId(cwd);
-  const s = metrics.stats();
+  const s = metrics.stats(repo);
   const candidates = store.listCandidates(repo).filter((c) => c.label === 'style');
 
   // 候选按规范归并，显示"离阈值还差几次"——比一个总数有用得多
@@ -47,18 +49,31 @@ function data(cwd) {
   return {
     repo,
     threshold: TUNING.promoteThreshold,
-    spec: spec.get(cwd),
-    conventions: existing.split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2)),
-    pitfalls: store.allPitfalls(repo).map((p) => ({ file: p.file, rule: p.rule, at: p.at })),
-    pending: store.listPending(repo).map((p) => ({
-      id: p.id, file: p.file, hunks: p.hunkCount, diff: p.diff, ageMin: p.ageMin,
-    })),
+    // 边界按会话隔离：同一仓库可能同时有多个会话在做不同需求
+    specs: spec.list(cwd),
+    sessions: spec.sessions(cwd),
+    conventions: withTags(existing.split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2))),
+    pitfalls: withTags(store.allPitfalls(repo).map((p) => ({ file: p.file, rule: p.rule, at: p.at }))),
+    // 归因单位是「一次交互」不是「一个文件的 diff」——见 src/batch.js
+    batches: batch.groupPending(store.listPending(repo)),
+    pendingCount: store.listPending(repo).length,
     ready: promote.readyToPromote(repo).filter((r) => !r.auto),   // auto 的已在归因时入库
     autoRule: TUNING.autoPromote,
     hasApiKey: !!process.env.ANTHROPIC_API_KEY,
     candidates: pendingRules,
-    stats: s,
+    stats: { ...s, rules: withTags(s.rules) },
+    tagLabels: tags.LABEL,
   };
+}
+
+/** 给每条挂上标签。读取时推导——已有数据不用迁移，标签体系调整也不用重刷全库 */
+function withTags(items) {
+  return items.map((it) => {
+    const text = typeof it === 'string' ? it : it.rule;
+    const t = tags.derive(text);
+    const base = typeof it === 'string' ? { rule: it } : it;
+    return { ...base, tag: t.primary, tags: t.all };
+  });
 }
 
 function readBody(req) {
@@ -73,9 +88,9 @@ async function handlePost(url, body, cwd) {
   const repo = repoId(cwd);
   switch (url) {
     case '/api/learn':
-      return apply.applyVerdict(repo, body);
+      return body.ids ? apply.applyBatch(repo, body) : apply.applyVerdict(repo, body);
     case '/api/dismiss':
-      return apply.dismiss(repo, body.id);
+      return apply.dismiss(repo, body.ids || body.id);
     case '/api/promote':
       return apply.confirmPromotion(repo, body.key);
     case '/api/auto':
@@ -87,7 +102,9 @@ async function handlePost(url, body, cwd) {
     case '/api/sync':
       return injectMod.syncClaudeMd(cwd, { global: !!body.global });
     case '/api/spec':
-      return body.clear ? { ok: true, cleared: spec.clear(cwd) } : { ok: true, spec: spec.set(cwd, body) };
+      return body.clear
+        ? { ok: true, cleared: spec.clear(cwd, body.sessionId) }
+        : { ok: true, spec: spec.set(cwd, body) };
     default:
       return { ok: false, why: 'unknown endpoint' };
   }

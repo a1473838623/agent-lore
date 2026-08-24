@@ -33,7 +33,7 @@ function scan(cwd) {
     const ageMin = (now - snap.at) / 60000;
     if (ageMin > TUNING.windowMinutes) {
       // 超窗：不采集，但要刷新基准，否则下次会把这段改动重新算一遍
-      store.putSnapshot(repo, snap.file, current);
+      store.putSnapshot(repo, snap.file, current, snap.sessionId);
       found.push({ file: snap.file, skipped: 'out-of-window', ageMin: Math.round(ageMin) });
       continue;
     }
@@ -46,6 +46,7 @@ function scan(cwd) {
       file: snap.file,
       repo,
       agentAt: snap.at,
+      sessionId: snap.sessionId || null,
       humanAt: now,
       ageMin: Math.round(ageMin),
       hunkCount: d.hunks.length,
@@ -54,7 +55,7 @@ function scan(cwd) {
     };
     store.addPending(repo, rec);
     // 把当前内容设为新基准 —— 同一处修正只学一次
-    store.putSnapshot(repo, snap.file, current);
+    store.putSnapshot(repo, snap.file, current, snap.sessionId);
     found.push(rec);
   }
   return { repo, found };

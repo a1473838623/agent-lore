@@ -8,8 +8,9 @@ const { similar } = require('./promote');
  * 一条规范被确认并开始注入之后，同类人工修正应当下降。
  * 不下降有两种可能，必须能区分：① 规范本身没用 ② 注入压根没生效（命中率为 0）。
  */
-function stats() {
-  const all = store.readMetrics();
+function stats(repo) {
+  // metrics.jsonl 是全局单文件，不按仓库过滤的话，"效果"里会混进别的仓库的规范
+  const all = repo ? store.readMetrics().filter((m) => m.repo === repo) : store.readMetrics();
   const promoted = all.filter((m) => m.type === 'promote');
   const corrections = all.filter((m) => m.type === 'correction');
   const injects = all.filter((m) => m.type === 'inject');

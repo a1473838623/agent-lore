@@ -31,7 +31,7 @@ const CMDS = {
     let content;
     try { content = fs.readFileSync(file, 'utf8'); } catch { return; }  // 读不到就静默放过
     if (Buffer.byteLength(content) > TUNING.maxFileBytes) return;
-    store.putSnapshot(repoId(cwd), path.resolve(file), content);
+    store.putSnapshot(repoId(cwd), path.resolve(file), content, arg('session'));
   },
 
   scan() {                         // lore scan   检测人类修正
@@ -138,15 +138,15 @@ const CMDS = {
     const file = rest[0];
     if (!file) return die('用法: lore inject <file>');
     let ctx = null;
-    try { ctx = inject.buildContext(cwd, path.resolve(file)); } catch { /* fail-open */ }
+    try { ctx = inject.buildContext(cwd, path.resolve(file), arg('session')); } catch { /* fail-open */ }
     if (!ctx) return;              // ← 未命中：什么都不输出，零 token
     store.recordMetric({ type: 'inject', repo: ctx.repo, file, keys: ctx.keys, tokens: ctx.tokens });
     process.stdout.write(ctx.text);
   },
 
   // —— 观测 ——
-  stats() {
-    const s = metrics.stats();
+  stats() {   // lore stats [--all]  默认只看本仓库
+    const s = metrics.stats(has('all') ? null : repoId(cwd));
     console.log(`注入次数 ${s.totalInjects}   累计注入 ${s.totalInjectedTokens} token   命中率 ${(s.hitRate * 100).toFixed(0)}%`);
     if (!s.rules.length) return console.log('还没有已入库的规范');
     console.log('\n修正复发率：');
@@ -174,14 +174,15 @@ const CMDS = {
         id: arg('id', rest[1]),
         scope: arg('scope'),
         out: (arg('out') || '').split(';').map((x) => x.trim()).filter(Boolean),
+        sessionId: arg('session'),
       });
       console.log('✅ 需求边界已设置，之后每次编辑前都会注入：');
       console.log(specMod.render(r));
     } else if (sub === 'clear') {
-      const r = specMod.clear(cwd);
+      const r = specMod.clear(cwd, arg('session'));
       console.log(r ? '✅ 已结束：' + r.id : '当前没有活跃需求');
     } else {
-      const r = specMod.get(cwd);
+      const r = specMod.get(cwd, arg('session'));
       console.log(r ? specMod.render(r) : '当前没有活跃需求边界。设置：lore spec set --id "xxx" --scope "..." --out "a;b"');
     }
   },

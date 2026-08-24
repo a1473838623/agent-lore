@@ -23,11 +23,15 @@ process.stdin.on('end', () => {
     const fp = ev.tool_input && (ev.tool_input.file_path || ev.tool_input.filePath);
     if (!fp) return;
     const lore = path.join(__dirname, '..', 'bin', 'lore.js');
+    // 会话报到：看板据此列出"最近活跃的会话"，否则用户不知道有哪些会话可以设边界
+    try { require('../src/spec').touchSession(ev.session_id, ev.cwd || process.cwd()); } catch { /* fail-open */ }
     const opts = { cwd: ev.cwd || process.cwd(), stdio: 'ignore', timeout: 3000 };
     // ② 先扫：此刻 fp 的快照还是上一轮的，能捕获到人类对它以及对其它文件的修改
     try { execFileSync(process.execPath, [lore, 'scan'], opts); } catch { /* fail-open */ }
     // ① 再快照：把本次 agent 写入设为新基准
-    execFileSync(process.execPath, [lore, 'snapshot', fp], opts);
+    const snapArgs = [lore, 'snapshot', fp];
+    if (ev.session_id) snapArgs.push('--session', ev.session_id);
+    execFileSync(process.execPath, snapArgs, opts);
   } catch { /* fail-open：任何异常都不影响 agent */ }
   process.exit(0);
 });

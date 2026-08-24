@@ -53,10 +53,53 @@ async function autoAttribute(repo, cwd) {
   };
 }
 
-/** 直接丢弃一条待归因（业务变更，或用户判断不值得学） */
+/**
+ * 对整个批次应用一条归因。
+ *
+ * 🔑 计数语义：**一个批次只算一次证据，不是 N 次。**
+ *   一次交互里 agent 写了 5 个文件、人用同样方式改了 5 处，这是**一个人做的一个决定**，
+ *   不是 5 个独立证据。按 N 次计，单次交互就能顶到升格阈值，
+ *   "累计 ≥3 次才泛化"这道闸就形同虚设了。
+ *
+ * 例外是 bug：踩坑绑定具体文件，所以批次内每个文件各记一条。
+ */
+function applyBatch(repo, { ids = [], label, rule, confidence }) {
+  if (!ids.length) return { ok: false, why: '批次为空' };
+  const gate = attribute.accept({ label, rule, confidence });
+  if (!gate.ok) {
+    ids.forEach((id) => store.markClassified(repo, id));
+    return { ok: false, dropped: true, why: gate.why, count: ids.length };
+  }
+
+  const pending = store.listPending(repo);
+  const items = ids.map((id) => pending.find((p) => p.id === id)).filter(Boolean);
+
+  let res;
+  if (label === 'bug') {
+    // 踩坑按文件绑定，逐个文件记
+    for (const it of items) res = promote.record(repo, { label, rule, confidence }, it);
+    res = { ...res, files: items.length };
+  } else {
+    // 规范：整批只记一条候选
+    res = promote.record(repo, { label, rule, confidence }, items[0] || { file: '?', diff: '' });
+  }
+
+  ids.forEach((id) => store.markClassified(repo, id));
+  store.recordMetric({
+    type: 'correction', repo,
+    key: res.key || promote.ruleKey(rule), rule,
+    file: (items[0] || {}).file, batchSize: items.length,
+  });
+
+  const auto = promote.autoPromote(repo);
+  return { ok: true, ...res, batchSize: items.length, autoPromoted: auto.map((a) => a.rule) };
+}
+
+/** 直接丢弃一条或一批待归因（业务变更，或用户判断不值得学） */
 function dismiss(repo, id) {
-  store.markClassified(repo, id);
-  return { ok: true };
+  const ids = Array.isArray(id) ? id : [id];
+  ids.forEach((x) => store.markClassified(repo, x));
+  return { ok: true, count: ids.length };
 }
 
 /** 人工确认一条达阈值的规范入库 */
@@ -68,4 +111,4 @@ function confirmPromotion(repo, key) {
   return { ok: true, rule: ready.rule };
 }
 
-module.exports = { applyVerdict, dismiss, confirmPromotion, autoAttribute };
+module.exports = { applyVerdict, applyBatch, dismiss, confirmPromotion, autoAttribute };
