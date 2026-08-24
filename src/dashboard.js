@@ -31,14 +31,30 @@ function data(cwd) {
 
 function serve(cwd) {
   const page = fs.readFileSync(path.join(__dirname, 'dashboard.html'), 'utf8');
-  http.createServer((req, res) => {
+  const server = http.createServer((req, res) => {
     if (req.url === '/api') {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify(data(cwd)));
     }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(page);
-  }).listen(PORT, '127.0.0.1', () => {
+  });
+
+  // 端口冲突是最常见的启动失败，且十有八九是自己上次没退干净。
+  // 抛一屏堆栈会让人以为代码坏了 —— 直接告诉他怎么处理。
+  server.on('error', (e) => {
+    if (e.code !== 'EADDRINUSE') { console.error('[lore] 看板启动失败：' + e.message); process.exit(1); }
+    console.error(`[lore] 端口 ${PORT} 已被占用。通常是上一个看板没退干净。
+
+  看看是不是已经开着了：  http://127.0.0.1:${PORT}
+  换个端口：              AGENT_LORE_PORT=4520 lore dashboard
+  找出占用者（PowerShell）：
+      Get-NetTCPConnection -LocalPort ${PORT} -State Listen |
+        ForEach-Object { Get-Process -Id $_.OwningProcess }`);
+    process.exit(1);
+  });
+
+  server.listen(PORT, '127.0.0.1', () => {
     console.log('[lore] 看板 http://127.0.0.1:' + PORT + '   (Ctrl+C 退出)');
   });
 }
