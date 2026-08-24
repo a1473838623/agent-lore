@@ -10,6 +10,7 @@ const attribute = require('../src/attribute');
 const promote = require('../src/promote');
 const inject = require('../src/inject');
 const metrics = require('../src/metrics');
+const bootstrap = require('../src/bootstrap');
 
 const cwd = process.cwd();
 const [, , cmd, ...rest] = process.argv;
@@ -37,6 +38,30 @@ const CMDS = {
     if (real.length) console.log(`\n下一步：lore review   ← 输出归因提示词`);
   },
 
+  bootstrap() {              // lore bootstrap [--path .] [--max 4000]  冷启动：从现有代码库归纳规范
+    const root = path.resolve(arg('path', cwd));
+    const max = Number(arg('max', 4000));
+    process.stderr.write(`扫描 ${root} …
+`);
+    const prof = bootstrap.profile(root, { maxFiles: max });
+    if (has('stat')) {           // 只看统计，不出提示词
+      for (const [lang, d] of Object.entries(prof.byLang)) {
+        console.log(`
+[${lang}] ${d.files} 文件`);
+        for (const [n, { a, b }] of Object.entries(d.probes)) {
+          if (a + b < 5) continue;
+          const pct = ((Math.max(a, b) / (a + b)) * 100).toFixed(0);
+          console.log(`  ${n.padEnd(6)} A=${String(a).padStart(6)}  B=${String(b).padStart(6)}   ${pct}% 偏向${a > b ? 'A' : 'B'}`);
+        }
+      }
+      return;
+    }
+    console.log(bootstrap.buildPrompt(prof));
+    console.log(`
+---
+把每行 JSON 回灌：  lore learn --json '<那一行>' --bootstrap`);
+  },
+
   // —— 归因 ——
   review() {                       // lore review   打印分类提示词，交给当前 harness 里的模型
     const repo = repoId(cwd);
@@ -60,6 +85,16 @@ const CMDS = {
     const raw = arg('json');
     if (!raw) return die(`用法: lore learn --json '{"id":"..","label":"style","confidence":0.9,"rule":".."}'`);
     let v; try { v = JSON.parse(raw); } catch { return die('JSON 解析失败'); }
+    if (has('bootstrap')) {
+      // 冷启动来的规范：证据是整个代码库的频次统计，不是单次修正，
+      // 所以不走 ≥3 次累计阈值，但**仍然要过置信度闸和人工确认**
+      const gate = attribute.accept({ ...v, label: 'style' });
+      if (!gate.ok) return console.log(`⊘ 丢弃：${gate.why}`);
+      const repo = repoId(cwd);
+      store.addConvention(repo, v.rule, { count: 1, firstSeen: Date.now(), key: promote.ruleKey(v.rule) + '·bootstrap' });
+      store.recordMetric({ type: 'promote', repo, key: promote.ruleKey(v.rule), rule: v.rule, source: 'bootstrap' });
+      return console.log(`✅ 冷启动规范已入库：${v.rule}`);
+    }
     applyVerdict(repoId(cwd), v);
   },
 
@@ -128,6 +163,7 @@ const CMDS = {
   help() {
     console.log(`agent-lore —— 从人类修正里学习仓库规范
 
+冷启动 lore bootstrap [--stat] 从现有代码库归纳规范（不必等修正累积）
 采集   lore snapshot <file>   记录 agent 写入（hook 调用）
        lore scan              检测人类修正
 归因   lore review            输出归因提示词（零配置，交给当前 harness 的模型）
