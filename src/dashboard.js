@@ -53,7 +53,9 @@ function data(cwd) {
     pending: store.listPending(repo).map((p) => ({
       id: p.id, file: p.file, hunks: p.hunkCount, diff: p.diff, ageMin: p.ageMin,
     })),
-    ready: promote.readyToPromote(repo),
+    ready: promote.readyToPromote(repo).filter((r) => !r.auto),   // auto 的已在归因时入库
+    autoRule: TUNING.autoPromote,
+    hasApiKey: !!process.env.ANTHROPIC_API_KEY,
     candidates: pendingRules,
     stats: s,
   };
@@ -76,6 +78,8 @@ async function handlePost(url, body, cwd) {
       return apply.dismiss(repo, body.id);
     case '/api/promote':
       return apply.confirmPromotion(repo, body.key);
+    case '/api/auto':
+      return apply.autoAttribute(repo, cwd);
     case '/api/scan': {
       const r = detect.scan(cwd);
       return { ok: true, found: r.found.filter((f) => !f.skipped).length };

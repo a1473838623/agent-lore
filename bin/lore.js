@@ -239,8 +239,10 @@ function applyVerdict(repo, v) {
   const res = applyMod.applyVerdict(repo, v);
   if (!res.ok) return console.log(`⊘ ${v.id} 丢弃：${res.why}`);
   if (res.kind === 'pitfall') return console.log(`✅ 踩坑已记录：${res.rule}`);
-  console.log(`📌 规范候选 ${res.count}/${res.threshold}：${res.rule}` +
-    (res.count >= res.threshold ? '  ← 已达阈值，跑 lore promote' : ''));
+  const auto = res.autoPromoted || [];
+  console.log(`📌 规范候选 ${res.count}/${res.threshold}：${res.rule}`);
+  for (const a of auto) console.log(`   ⚡ 已自动入库：${a}`);
+  if (!auto.length && res.count >= res.threshold) console.log('   ← 已达阈值，跑 lore promote 人工确认');
 }
 
 function die(msg) { console.error(msg); process.exitCode = 1; }

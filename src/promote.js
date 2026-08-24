@@ -89,7 +89,7 @@ function record(repo, verdict, source) {
   };
 }
 
-/** 列出达到阈值、等待人工确认的规范 */
+/** 列出达到阈值的规范。每条附 auto 标记：够格自动入库的不必占用人的注意力 */
 function readyToPromote(repo) {
   const all = store.listCandidates(repo).filter((c) => c.label === 'style');
   const groups = new Map();
@@ -102,13 +102,23 @@ function readyToPromote(repo) {
   const existing = store.getConventions(repo);
   return [...groups.entries()]
     .filter(([k, g]) => g.length >= TUNING.promoteThreshold && !existing.includes(`id=${k}`))
-    .map(([key, g]) => ({
-      key,
-      rule: g[0].rule,
-      count: g.length,
-      firstSeen: Math.min(...g.map((c) => c.at)),
-      files: [...new Set(g.map((c) => c.file))],
-    }));
+    .map(([key, g]) => {
+      const avgConfidence = g.reduce((n, c) => n + (c.confidence || 0), 0) / g.length;
+      const related = findRelated(repo, g[0].rule);
+      const A = TUNING.autoPromote;
+      return {
+        key,
+        rule: g[0].rule,
+        count: g.length,
+        avgConfidence: Number(avgConfidence.toFixed(2)),
+        related,
+        firstSeen: Math.min(...g.map((c) => c.at)),
+        files: [...new Set(g.map((c) => c.file))],
+        auto: g.length >= A.minCount
+          && avgConfidence >= A.minAvgConfidence
+          && (!A.requireNoRelated || related.length === 0),
+      };
+    });
 }
 
 /**
@@ -135,4 +145,20 @@ function findRelated(repo, rule) {
     .sort((a, b) => b.sim - a.sim);
 }
 
-module.exports = { record, readyToPromote, ruleKey, similar, findRelated, RELATED_THRESHOLD };
+/**
+ * 把够格的候选直接入库，返回自动入库的条目。
+ * 剩下的（related 非空、置信度不够、次数不够）仍然进待确认。
+ */
+function autoPromote(repo) {
+  const store = require('./store');
+  const done = [];
+  for (const r of readyToPromote(repo).filter((x) => x.auto)) {
+    store.addConvention(repo, r.rule, r);
+    store.recordMetric({ type: 'promote', repo, key: r.key, rule: r.rule, source: 'auto',
+      count: r.count, avgConfidence: r.avgConfidence });
+    done.push(r);
+  }
+  return done;
+}
+
+module.exports = { record, readyToPromote, autoPromote, ruleKey, similar, findRelated, RELATED_THRESHOLD };

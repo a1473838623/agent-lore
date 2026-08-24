@@ -141,10 +141,43 @@ async function post(url, body) {
   } finally { busy = false; }
 }
 
+let lastSig = null;
+
+/** 数据指纹：只取会影响渲染的部分，避免时间戳之类的噪声导致假变化 */
+function signature(d) {
+  return JSON.stringify([
+    d.repo, d.spec && d.spec.id, d.conventions, d.pitfalls.map(p => p.rule),
+    d.pending.map(p => p.id), d.ready.map(r => r.key + r.count),
+    d.candidates.map(c => c.key + c.count), d.stats.totalInjects, d.stats.totalInjectedTokens,
+    d.stats.rules.map(r => r.key + r.before + r.after + r.injected),
+  ]);
+}
+
 async function load(force) {
-  if (!force && (dirty || busy)) return;    // 正在填表就不刷新
-  D = await (await fetch('/api')).json();
+  if (!force && (dirty || busy)) return;      // 正在填表就不刷新
+  const next = await (await fetch('/api')).json();
+  const sig = signature(next);
+
+  // 数据没变就一个 DOM 节点都不动 —— 否则每 5 秒整页重建，
+  // 用户滚到一半的 diff 会被弹回顶部
+  if (!force && sig === lastSig) { D = next; return; }
+
+  // 真要重渲染时，把滚动位置存下来再还原
+  const pageY = window.scrollY;
+  const scrolls = {};
+  document.querySelectorAll('pre.diff').forEach((el, i) => {
+    const k = el.closest('.card') ? el.closest('.card').id || ('i' + i) : ('i' + i);
+    if (el.scrollTop) scrolls[k] = el.scrollTop;
+  });
+
+  D = next; lastSig = sig;
   render();
+
+  document.querySelectorAll('pre.diff').forEach((el, i) => {
+    const k = el.closest('.card') ? el.closest('.card').id || ('i' + i) : ('i' + i);
+    if (scrolls[k]) el.scrollTop = scrolls[k];
+  });
+  window.scrollTo(0, pageY);
 }
 
 /* ────────── 渲染 ────────── */
@@ -189,7 +222,13 @@ function render() {
       ${d.ready.map(readyCard).join('')}</section>`);
   }
   if (d.pending.length) {
-    H.push(`<section><h2 class="todo">待归因 <span class="n">${d.pending.length}</span></h2>
+    H.push(`<section><h2 class="todo">待归因 <span class="n">${d.pending.length}</span>
+        <span style="flex:1"></span>
+        <button class="primary" onclick="autoAll()" ${d.hasApiKey ? '' : 'disabled'}>⚡ 全部自动归因</button>
+      </h2>
+      ${d.hasApiKey ? '' : `<div class="hint" style="margin:-2px 0 9px">
+        自动归因需要设置 ANTHROPIC_API_KEY 环境变量。没有 key 时用
+        <code>lore review</code> 把提示词交给当前 harness 里的模型判断，再回灌结果。</div>`}
       ${d.pending.map(pendingCard).join('')}</section>`);
   }
 
@@ -245,15 +284,30 @@ function pendingCard(p) {
   </div>`;
 }
 
-/* 达阈值待确认 */
+/* 达阈值但没够格自动入库的 —— 必须说清楚"为什么还要问你" */
 function readyCard(r) {
+  const A = D.autoRule || {};
+  const why = [];
+  if (r.related && r.related.length) {
+    why.push(`与已有规范话题重叠 —— <b>重复还是冲突，相似度判不出来，只能你看</b>`);
+  }
+  if (r.avgConfidence < (A.minAvgConfidence || 0.9)) {
+    why.push(`归因平均置信度 ${r.avgConfidence}，低于自动入库线 ${A.minAvgConfidence}`);
+  }
+  if (r.count < (A.minCount || 5)) {
+    why.push(`累计 ${r.count} 次，未达自动入库线 ${A.minCount} 次`);
+  }
+
   return `<div class="card act">
     <div class="rule">${esc(r.rule)}</div>
     <div class="meta" style="margin:8px 0 0">
-      <span>累计 ${r.count} 次</span><span>${r.files.length} 个文件</span><span>${esc(r.key)}</span></div>
+      <span>累计 ${r.count} 次</span><span>置信度 ${r.avgConfidence}</span>
+      <span>${r.files.length} 个文件</span><span>${esc(r.key)}</span></div>
+    ${why.length ? `<div class="hint" style="margin-top:7px">需要你确认：${why.join('；')}</div>` : ''}
+    ${(r.related || []).map(x =>
+      `<div class="hint" style="margin-top:4px">↔ 相关已有规范（${x.sim.toFixed(2)}）：${esc(x.existing)}</div>`).join('')}
     <div class="acts">
       <button class="primary" onclick="confirmRule('${r.key}')">✓ 确认入库</button>
-      <span class="hint">入库后会随 lore sync 写进 CLAUDE.md</span>
     </div>
   </div>`;
 }
@@ -331,9 +385,24 @@ async function submit(id) {
 
   const r = await post('/api/learn', { id, label: f.dataset.label, rule, confidence });
   dirty = false;
-  toast(r.ok ? (r.kind === 'pitfall' ? '已记为踩坑'
-        : `规范候选 ${r.count}/${r.threshold}` + (r.count >= r.threshold ? ' · 已达阈值' : ''))
-      : '已丢弃：' + r.why);
+  const auto = (r.autoPromoted || []).length;
+  toast(!r.ok ? '已丢弃：' + r.why
+      : r.kind === 'pitfall' ? '已记为踩坑'
+      : `规范候选 ${r.count}/${r.threshold}`
+        + (r.count >= r.threshold ? ' · 已达阈值' : '')
+        + (auto ? ` · ${auto} 条已自动入库` : ''));
+  load(true);
+}
+
+/** 一键批量归因。没有 API key 时给降级路径，而不是干瞪眼 */
+async function autoAll() {
+  toast('正在归因…');
+  const r = await post('/api/auto', {});
+  if (!r.ok) return toast(r.why);
+  const auto = (r.autoPromoted || []).length;
+  toast(r.done
+    ? `归因 ${r.done} 条：保留 ${r.kept}，丢弃 ${r.dropped}` + (auto ? ` · ${auto} 条自动入库` : '')
+    : r.why);
   load(true);
 }
 
