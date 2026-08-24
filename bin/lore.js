@@ -14,6 +14,7 @@ const metrics = require('../src/metrics');
 const bootstrap = require('../src/bootstrap');
 const install = require('../src/install');
 const specMod = require('../src/spec');
+const applyMod = require('../src/apply');
 
 const cwd = process.cwd();
 // --repo 覆盖：让跨仓库/工具级的通用规范能存进 _global
@@ -235,14 +236,10 @@ const CMDS = {
 };
 
 function applyVerdict(repo, v) {
-  const gate = attribute.accept(v);
-  if (!gate.ok) { console.log(`⊘ ${v.id} 丢弃：${gate.why}`); store.markClassified(repo, v.id); return; }
-  const src = store.listPending(repo).find((p) => p.id === v.id) || { file: '?', diff: '' };
-  const res = promote.record(repo, v, src);
-  store.markClassified(repo, v.id);
-  store.recordMetric({ type: 'correction', repo, key: res.key || promote.ruleKey(v.rule), rule: v.rule, file: src.file });
-  if (res.kind === 'pitfall') console.log(`✅ 踩坑已记录：${res.rule}`);
-  else console.log(`📌 规范候选 ${res.count}/${res.threshold}：${res.rule}` +
+  const res = applyMod.applyVerdict(repo, v);
+  if (!res.ok) return console.log(`⊘ ${v.id} 丢弃：${res.why}`);
+  if (res.kind === 'pitfall') return console.log(`✅ 踩坑已记录：${res.rule}`);
+  console.log(`📌 规范候选 ${res.count}/${res.threshold}：${res.rule}` +
     (res.count >= res.threshold ? '  ← 已达阈值，跑 lore promote' : ''));
 }
 

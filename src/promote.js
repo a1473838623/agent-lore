@@ -24,18 +24,26 @@ const ruleKey = (rule) => sha1(normalize(rule)).slice(0, 10);
  * 所以：ASCII 按词切，CJK 按**字符二元组**切（和 SQLite FTS5 用 trigram 处理中文同理）。
  * 用 overlap coefficient 而非 Jaccard，避免长短句被长度差异惩罚。
  */
+const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'not', 'for', 'via', 'on', 'in', 'to', 'of',
+  'be', 'is', 'are', 'must', 'should', 'use', 'using', 'used', 'with', 'than', 'rather',
+  'through', 'never', 'always', 'instead', 'when', 'that', 'this', 'it', 'by', 'do', 'does']);
+
 function tokenize(s) {
   const t = normalize(s);
   const out = new Set();
   for (const w of t.split(' ')) {
     if (!w) continue;
     if (/[一-龥]/.test(w)) {
-      // CJK：字符二元组
+      // CJK：字符二元组（中文没有空格，整句会塌成一个词）
       const chars = [...w];
       for (let i = 0; i < chars.length - 1; i++) out.add(chars[i] + chars[i + 1]);
       if (chars.length === 1) out.add(chars[0]);
-    } else if (w.length > 1) {
+    } else if (w.length > 1 && !STOP.has(w)) {
+      // 英文：词本身 + 字符三元组。
+      // 只用整词会被词形变化打败——inject/injection、field/fields 被算成不同 token，
+      // 同义规范的重叠度只有 0.44，永远到不了阈值。三元组能跨词形匹配上。
       out.add(w);
+      for (let i = 0; i + 3 <= w.length; i++) out.add(w.slice(i, i + 3));
     }
   }
   return out;
