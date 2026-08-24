@@ -1,0 +1,88 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>agent-lore</title>
+<style>
+:root{--bg:#fff;--fg:#111;--dim:#666;--line:#e5e5e5;--card:#fafafa;--ok:#0a7;--warn:#c80;--bad:#c33}
+@media(prefers-color-scheme:dark){:root{--bg:#111;--fg:#eee;--dim:#999;--line:#2a2a2a;--card:#1a1a1a}}
+*{box-sizing:border-box}
+body{margin:0 auto;padding:24px;max-width:1000px;background:var(--bg);color:var(--fg);
+  font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+h1{font-size:18px;margin:0 0 4px}
+h2{font-size:14px;margin:24px 0 8px;color:var(--dim);font-weight:600}
+.sub{color:var(--dim);font-size:12px;margin-bottom:20px}
+.row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.kpi{flex:1;min-width:130px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}
+.kpi b{display:block;font-size:22px;font-variant-numeric:tabular-nums}
+.kpi span{color:var(--dim);font-size:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:8px}
+.f{color:var(--dim);font-size:12px;font-family:ui-monospace,Consolas,monospace;word-break:break-all}
+pre{margin:8px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line);border-radius:6px;
+  overflow-x:auto;font:12px/1.5 ui-monospace,Consolas,monospace;max-height:220px}
+.add{color:var(--ok)}.del{color:var(--bad)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.empty{color:var(--dim);font-size:13px;padding:8px 0}
+</style>
+<body><div id="app">加载中…</div>
+<script>
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const diffHtml = d => esc(d).split('\n').map(l =>
+  l.startsWith('+') ? '<span class="add">' + l + '</span>' :
+  l.startsWith('-') ? '<span class="del">' + l + '</span>' : l).join('\n');
+const kpi = (v, label) => '<div class="kpi"><b>' + v + '</b><span>' + label + '</span></div>';
+const verdictClass = v => v.startsWith('✅') ? 'ok' : v.startsWith('🟡') ? 'warn' : v.startsWith('❌') ? 'bad' : '';
+
+async function load() {
+  const d = await (await fetch('/api')).json();
+  const s = d.stats;
+  const html = [];
+  html.push('<h1>agent-lore</h1><div class="sub">' + esc(d.repo) + '</div>');
+
+  html.push('<div class="row">',
+    kpi(d.conventions.length, '已确认规范'),
+    kpi(d.pitfalls.length, '踩坑记录'),
+    kpi(d.candidates, '候选（未达阈值）'),
+    kpi(d.pending.length, '待归因'),
+    kpi(s.totalInjects, '注入次数'),
+    kpi(s.totalInjectedTokens, '累计注入 token'),
+    '</div>');
+
+  if (d.ready.length) {
+    html.push('<h2>⚠️ 达到阈值，等待人工确认 —— lore promote --yes</h2>');
+    for (const r of d.ready) {
+      html.push('<div class="card"><b>' + esc(r.rule) + '</b><div class="f">累计 ' +
+        r.count + ' 次 · ' + r.files.length + ' 个文件</div></div>');
+    }
+  }
+
+  html.push('<h2>修正复发率 —— 规范到底有没有用</h2>');
+  if (s.rules.length) {
+    for (const r of s.rules) {
+      html.push('<div class="card"><b>' + esc(r.rule) + '</b><div class="f">入库前 ' + r.before +
+        ' 次 → 入库后 ' + r.after + ' 次 · 注入 ' + r.injected + ' 次 · <span class="' +
+        verdictClass(r.verdict) + '">' + esc(r.verdict) + '</span></div></div>');
+    }
+  } else {
+    html.push('<div class="empty">还没有已入库的规范</div>');
+  }
+
+  html.push('<h2>规范（常驻，已同步至 CLAUDE.md）</h2>');
+  html.push(d.conventions.length
+    ? d.conventions.map(c => '<div class="card">' + esc(c) + '</div>').join('')
+    : '<div class="empty">暂无</div>');
+
+  html.push('<h2>踩坑（按文件/符号注入）</h2>');
+  html.push(d.pitfalls.length
+    ? d.pitfalls.map(p => '<div class="card">' + esc(p.rule) + '<div class="f">' + esc(p.file) + '</div></div>').join('')
+    : '<div class="empty">暂无</div>');
+
+  html.push('<h2>待归因</h2>');
+  html.push(d.pending.length
+    ? d.pending.map(p => '<div class="card"><div class="f">' + esc(p.id) + ' · ' + esc(p.file) +
+        ' · ' + p.hunks + ' 处改动</div><pre>' + diffHtml(p.diff) + '</pre></div>').join('')
+    : '<div class="empty">没有待归因的修正</div>');
+
+  document.getElementById('app').innerHTML = html.join('');
+}
+load();
+setInterval(load, 4000);
+</script>

@@ -103,4 +103,28 @@ function readyToPromote(repo) {
     }));
 }
 
-module.exports = { record, readyToPromote, ruleKey, similar };
+/**
+ * 找出话题相关的已有规范（DESIGN §4-③）。
+ *
+ * ⚠️ 刻意**不自动判断"重复"还是"冲突"**。实测数据：
+ *     同义重复 0.64 ｜ 语义对立 0.36 / 0.54 ｜ 无关 0.00
+ *   相关与无关分得很开，但**重复与冲突的区间完全重叠** ——
+ *   字符串相似度只能判「是不是同一个话题」，判不了「是不是对立」。
+ *   靠它自动分类必然出错，而一条被误判为"重复"从而跳过的对立规范，
+ *   会让知识库自相矛盾。
+ *
+ * 所以只负责召回相关项，判断交给 promote 时的人工确认闸 —— 这正是那道闸存在的意义。
+ */
+const RELATED_THRESHOLD = 0.3;
+
+function findRelated(repo, rule) {
+  const store = require('./store');
+  const existing = store.getConventions(repo).split(String.fromCharCode(10))
+    .filter((l) => l.startsWith('- ')).map((l) => l.slice(2).trim());
+  return existing
+    .map((e) => ({ existing: e, sim: similar(e, rule) }))
+    .filter((x) => x.sim >= RELATED_THRESHOLD)
+    .sort((a, b) => b.sim - a.sim);
+}
+
+module.exports = { record, readyToPromote, ruleKey, similar, findRelated, RELATED_THRESHOLD };

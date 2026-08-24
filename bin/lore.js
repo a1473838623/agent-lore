@@ -11,6 +11,7 @@ const promote = require('../src/promote');
 const inject = require('../src/inject');
 const metrics = require('../src/metrics');
 const bootstrap = require('../src/bootstrap');
+const install = require('../src/install');
 
 const cwd = process.cwd();
 const [, , cmd, ...rest] = process.argv;
@@ -158,6 +159,26 @@ const CMDS = {
 
   watch() { require('../src/watch').watch(cwd, { intervalMs: Number(arg('interval', 5)) * 1000 }); },
 
+  mcp() { require('../src/mcp').serve(cwd); },        // L2：MCP stdio server
+
+  dashboard() { require('../src/dashboard').serve(cwd); },
+
+  init() {                                             // 一键装 hook
+    const r = install.installClaudeCode({ dryRun: has('dry') });
+    if (!r.ok) return die(r.reason);
+    if (r.dryRun) { console.log('[预览] ' + r.path + String.fromCharCode(10) + r.preview); return; }
+    console.log('✅ Claude Code hook 已装入 ' + r.path + '（原文件已备份）');
+    console.log('   重启 Claude Code 后生效');
+    for (const [name, snippet] of Object.entries(install.otherHarnesses())) {
+      console.log(String.fromCharCode(10) + '── ' + name + ' ──' + String.fromCharCode(10) + snippet);
+    }
+  },
+
+  uninstall() {
+    const r = install.uninstallClaudeCode();
+    console.log(r.ok ? '✅ 已移除 ' + r.removed + ' 条 hook 配置' : r.reason);
+  },
+
   where() { console.log(HOME); },
 
   help() {
@@ -172,7 +193,12 @@ const CMDS = {
 升格   lore promote [--yes]   达阈值的规范入库（人工确认闸）
        lore sync              规范 → 项目 CLAUDE.md（常驻，不走检索）
 注入   lore inject <file>     输出相关踩坑（hook 调用；未命中零输出）
-观测   lore stats             修正复发率
+接入   lore init [--dry]      一键装 Claude Code hook + 打印其它 harness 接入方式
+       lore mcp               L2：MCP stdio server（Cursor/Codex/Cline…）
+       lore watch             L3：git 工作区监听（任何工具）
+       lore uninstall         移除 hook
+观测   lore dashboard         本地看板 http://127.0.0.1:4519
+       lore stats             修正复发率
        lore list              查看已学到的东西
        lore where             知识库位置
 

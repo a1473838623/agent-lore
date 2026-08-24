@@ -72,24 +72,25 @@ Agent 写文件 ──► 快照
 git clone <repo> && cd agent-lore && npm link   # 或直接用 node bin/lore.js
 ```
 
-Claude Code（L1，最完整）—— `~/.claude/settings.json`：
-
-```json
-{
-  "hooks": {
-    "PreToolUse":  [{ "matcher": "Write|Edit|MultiEdit",
-      "hooks": [{ "type": "command", "command": "node /abs/path/agent-lore/hooks/pre-edit.js" }] }],
-    "PostToolUse": [{ "matcher": "Write|Edit|MultiEdit",
-      "hooks": [{ "type": "command", "command": "node /abs/path/agent-lore/hooks/post-write.js" }] }]
-  }
-}
-```
-
-其他 harness（L3 保底，零依赖任何扩展点）：
-
 ```bash
-lore watch          # 监听 git 工作区，未经上报的变更即视为人类修正
+lore init           # 一键装 Claude Code hook，并打印其它 harness 的接入片段
+lore init --dry     # 只预览不写盘
+lore dashboard      # 本地看板 http://127.0.0.1:4519
 ```
+
+`lore init` 会**先备份** `~/.claude/settings.json`，且重复执行不会叠加配置。
+
+### 三层接入
+
+| 层 | 命令 | 适用 | 注入时机 |
+|---|---|---|---|
+| **L1** | `lore init` | Claude Code | **编辑前强制注入**，最完整 |
+| **L2** | `lore mcp` | Cursor / Cline / Codex / Windsurf … | 靠 agent 主动调用 |
+| **L3** | `lore watch` | **任何工具，包括没有扩展点的** | 只采集，不注入 |
+
+L2/L3 的接入片段由 `lore init` 一并打印。**L3 是可移植性的兜底** ——
+只要 agent 改了文件工作区就有变化，未经 L1/L2 上报的变更即视为人类修正，
+这个推断在任何 harness 下都成立。
 
 ## 日常用法
 
@@ -124,11 +125,24 @@ lore stats                 # 修正复发率
 
 与 [agent-beacon](https://github.com/a1473838623/agent-beacon) 共享这套约束 —— 同一方法论的两个应用。
 
+## 看板
+
+`lore dashboard` → `http://127.0.0.1:4519`
+
+显示：已确认规范 / 踩坑 / 候选进度 / 待归因 diff / 注入次数与 token 成本 /
+**修正复发率**（这是唯一的效果指标，必须一眼能看到）。
+
+和 [agent-beacon](https://github.com/a1473838623/agent-beacon) 的看板同一个思路：
+agent 背后的状态，不显示就等于不存在。
+
 ## 已知边界
 
 - **归因准确率是天花板。** 人对文件的改动大部分是业务演进而非纠正 AI，噪声占多数。
   三道闸（置信度阈值、30 分钟采集窗、≥3 次累计）都是在压误报，代价是召回偏低。
 - **同类归并是关键词级的**（ASCII 按词 + CJK 字符二元组），不是语义聚类。措辞差异过大时会漏并。
+- **不自动判断"重复"还是"冲突"。** 实测：同义重复 0.64 ｜ 语义对立 0.36 / 0.54 ｜ 无关 0.00 ——
+  相关与无关分得很开，但**重复与冲突的区间完全重叠**。字符串相似度只能判"是不是同一话题"，
+  判不了"是不是对立"。所以只召回相关项，判断交给 `promote` 的人工确认闸。
 - **`lore stats` 在注入次数为 0 时不下结论** —— 必须能区分"规范没用"和"注入没生效"。
 - 检索刻意不上向量：检索词天然是专有名词，关键词精确率更高。规模到千级再换，接口不变。
 
