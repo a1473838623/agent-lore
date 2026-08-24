@@ -4,6 +4,7 @@ const path = require('path');
 const { TUNING } = require('./config');
 const { estimateTokens, extractSymbols, repoId, gitRoot } = require('./util');
 const store = require('./store');
+const spec = require('./spec');
 
 /**
  * 带外注入（DESIGN §4-③ / §7）。
@@ -38,8 +39,12 @@ function buildContext(cwd, file) {
     }
   } catch { /* 文件可能是新建的，读不到就只用 ① */ }
 
+  // 需求边界属于**状态**不是规范：活跃期间无条件注入，不参与相关性检索。
+  // 漏注入一次就可能越界，所以它优先于踩坑，也不受踩坑预算挤占。
+  const active = spec.render(spec.get(cwd));
+
   const picked = [...direct, ...related].sort((a, b) => b.score - a.score);
-  if (!picked.length) return null;                    // ← 未命中：零注入，不是注入"无相关知识"
+  if (!picked.length && !active) return null;         // ← 全未命中：零注入，不是注入"无相关知识"
 
   const lines = [];
   let used = 0;
@@ -52,28 +57,43 @@ function buildContext(cwd, file) {
     usedKeys.push(p.key);
     used += cost;
   }
-  if (!lines.length) return null;
+  if (!lines.length && !active) return null;
+
+  // 边界排在踩坑前面：它是硬约束，踩坑是参考
+  const blocks = [];
+  if (active) blocks.push(active);
+  if (lines.length) blocks.push(`【历史踩坑】这个文件相关（来自过往人工修正）：\n${lines.join('\n')}`);
 
   return {
-    text: `【agent-lore】这个文件相关的历史踩坑（来自过往人工修正）：\n${lines.join('\n')}`,
-    tokens: used,
+    text: blocks.join('\n\n'),
+    tokens: used + (active ? estimateTokens(active) : 0),
     keys: usedKeys,
     repo,
   };
 }
 
-/** 把已确认的 convention 同步进项目 CLAUDE.md —— 规范走常驻，不走检索 */
-function syncClaudeMd(cwd) {
-  const repo = repoId(cwd);
+/**
+ * 把已确认的 convention 同步进 CLAUDE.md —— 规范走常驻，不走检索。
+ *
+ * global=true 时写用户级 ~/.claude/CLAUDE.md，仓库用 _global：
+ * 工具级/环境级规范（PowerShell 编码、git 行为、中文分词…）不属于任何仓库，
+ * 但每个仓库都需要，所以归到用户级常驻。
+ */
+function syncClaudeMd(cwd, { global: isGlobal = false } = {}) {
+  const repo = isGlobal ? '_global' : repoId(cwd);
   const conv = store.getConventions(repo);
   if (!conv.trim()) return { written: false, reason: '还没有已确认的规范' };
 
-  const root = gitRoot(cwd) || cwd;
-  const target = path.join(root, 'CLAUDE.md');
+  const target = isGlobal
+    ? path.join(require('os').homedir(), '.claude', 'CLAUDE.md')
+    : path.join(gitRoot(cwd) || cwd, 'CLAUDE.md');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
   const BEGIN = '<!-- agent-lore:begin -->';
   const END = '<!-- agent-lore:end -->';
   const rules = conv.split('\n').filter((l) => l.startsWith('- ')).join('\n');
-  const block = `${BEGIN}\n## 本仓库编码规范（agent-lore 自动维护，勿手改此段）\n\n${rules}\n${END}`;
+  const title = isGlobal ? '通用工程规范（agent-lore 自动维护，勿手改此段）'
+                         : '本仓库编码规范（agent-lore 自动维护，勿手改此段）';
+  const block = `${BEGIN}\n## ${title}\n\n${rules}\n${END}`;
 
   let existing = '';
   try { existing = fs.readFileSync(target, 'utf8'); } catch { /* 首次创建 */ }

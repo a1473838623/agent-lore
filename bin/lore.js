@@ -3,7 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 const { TUNING, HOME } = require('../src/config');
-const { repoId } = require('../src/util');
+const { repoId: _repoId } = require('../src/util');
+const repoId = (d) => REPO_OVERRIDE || _repoId(d);
 const store = require('../src/store');
 const detect = require('../src/detect');
 const attribute = require('../src/attribute');
@@ -12,8 +13,11 @@ const inject = require('../src/inject');
 const metrics = require('../src/metrics');
 const bootstrap = require('../src/bootstrap');
 const install = require('../src/install');
+const specMod = require('../src/spec');
 
 const cwd = process.cwd();
+// --repo 覆盖：让跨仓库/工具级的通用规范能存进 _global
+const REPO_OVERRIDE = (() => { const i = process.argv.indexOf('--repo'); return i >= 0 ? process.argv[i + 1] : null; })();
 const [, , cmd, ...rest] = process.argv;
 const arg = (n, d) => { const i = rest.indexOf('--' + n); return i >= 0 ? rest[i + 1] : d; };
 const has = (n) => rest.includes('--' + n);
@@ -120,8 +124,8 @@ const CMDS = {
     console.log(`\n下一步：lore sync   ← 写进项目 CLAUDE.md（规范走常驻，不走检索）`);
   },
 
-  sync() {                         // lore sync   convention → 项目 CLAUDE.md
-    const r = inject.syncClaudeMd(cwd);
+  sync() {                         // lore sync [--global]   convention → CLAUDE.md
+    const r = inject.syncClaudeMd(cwd, { global: has('global') });
     console.log(r.written ? `✅ ${r.count} 条规范已写入 ${r.target}` : `跳过：${r.reason}`);
   },
 
@@ -159,6 +163,25 @@ const CMDS = {
 
   watch() { require('../src/watch').watch(cwd, { intervalMs: Number(arg('interval', 5)) * 1000 }); },
 
+  spec() {          // lore spec set|show|clear   —— 管理当前需求边界（上下文状态）
+    const sub = rest[0];
+    if (sub === 'set') {
+      const r = specMod.set(cwd, {
+        id: arg('id', rest[1]),
+        scope: arg('scope'),
+        out: (arg('out') || '').split(';').map((x) => x.trim()).filter(Boolean),
+      });
+      console.log('✅ 需求边界已设置，之后每次编辑前都会注入：');
+      console.log(specMod.render(r));
+    } else if (sub === 'clear') {
+      const r = specMod.clear(cwd);
+      console.log(r ? '✅ 已结束：' + r.id : '当前没有活跃需求');
+    } else {
+      const r = specMod.get(cwd);
+      console.log(r ? specMod.render(r) : '当前没有活跃需求边界。设置：lore spec set --id "xxx" --scope "..." --out "a;b"');
+    }
+  },
+
   mcp() { require('../src/mcp').serve(cwd); },        // L2：MCP stdio server
 
   dashboard() { require('../src/dashboard').serve(cwd); },
@@ -191,8 +214,10 @@ const CMDS = {
        lore learn --json '..' 回灌归因结果
        lore auto              有 ANTHROPIC_API_KEY 时自动归因
 升格   lore promote [--yes]   达阈值的规范入库（人工确认闸）
-       lore sync              规范 → 项目 CLAUDE.md（常驻，不走检索）
-注入   lore inject <file>     输出相关踩坑（hook 调用；未命中零输出）
+       lore sync [--global]   规范 → 项目/用户级 CLAUDE.md（常驻，不走检索）
+边界   lore spec set --id X --scope "..." --out "a;b"   设当前需求边界（活跃期间无条件注入）
+       lore spec show / clear 查看 / 结束
+注入   lore inject <file>     输出边界 + 相关踩坑（hook 调用；全未命中零输出）
 接入   lore init [--dry]      一键装 Claude Code hook + 打印其它 harness 接入方式
        lore mcp               L2：MCP stdio server（Cursor/Codex/Cline…）
        lore watch             L3：git 工作区监听（任何工具）
