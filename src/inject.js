@@ -5,6 +5,7 @@ const { TUNING } = require('./config');
 const { estimateTokens, extractSymbols, repoId, gitRoot } = require('./util');
 const store = require('./store');
 const spec = require('./spec');
+const recallMod = require('./recall');
 
 /**
  * 带外注入（DESIGN §4-③ / §7）。
@@ -29,6 +30,11 @@ function buildContext(cwd, file, sessionId) {
     const content = fs.readFileSync(file, 'utf8');
     const syms = new Set(extractSymbols(content));
     if (syms.size) {
+      // 跨文件召回：默认符号匹配。实测（lore eval compare）——
+      //   查询含专有名词时关键词 recall 100%、向量 90%
+      //   自然语言查询时关键词 0%、向量 30%（同语言可达 100%，瓶颈是跨语言）
+      // 这里的"查询"是文件里的符号，天然属于前者，所以默认不上向量。
+      // LORE_RECALL=vector|hybrid 可切换。
       related = store.allPitfalls(repo)
         .filter((p) => p.file !== file)
         .map((p) => {

@@ -15,7 +15,10 @@ const bootstrap = require('../src/bootstrap');
 const install = require('../src/install');
 const specMod = require('../src/spec');
 const applyMod = require('../src/apply');
+const evalMod = require('../src/eval');
+const embedMod = require('../src/embed');
 
+const NL = String.fromCharCode(10);
 const cwd = process.cwd();
 // --repo 覆盖：让跨仓库/工具级的通用规范能存进 _global
 const REPO_OVERRIDE = (() => { const i = process.argv.indexOf('--repo'); return i >= 0 ? process.argv[i + 1] : null; })();
@@ -187,6 +190,53 @@ const CMDS = {
     }
   },
 
+  async embed() {                  // lore embed   探测 embedding 后端
+    const r = await embedMod.probe(arg('spec'));
+    console.log(r.ok
+      ? `✅ ${r.kind}:${r.model}  维度 ${r.dim}`
+      : `❌ ${r.kind || '?'}:${r.model || '?'} 不可用 —— ${r.why}` + NL + '   召回会自动降级到关键词，不影响使用');
+  },
+
+  async eval() {                   // lore eval init|run|compare
+    const repo = repoId(cwd);
+    const sub = rest[0];
+    const k = Number(arg('k', 3));
+
+    if (sub === 'init') {
+      const sk = evalMod.initSkeleton(repo);
+      if (!sk.rows.length) return console.log('候选池为空：还没有规范或踩坑');
+      require('fs').writeFileSync(sk.file.replace('.jsonl', '.skeleton.jsonl'),
+        sk.rows.map((r) => JSON.stringify(r)).join(NL) + NL, 'utf8');
+      console.log(`已生成 ${sk.rows.length} 道题的骨架：${sk.file.replace('.jsonl', '.skeleton.jsonl')}`);
+      console.log(NL + '把每行的 q 填上（_hint 是对应的规范），type 标 symbol 或 natural，');
+      console.log('然后改名成 ' + require('path').basename(sk.file) + ' 即可。');
+      console.log(NL + '⚠️ 刻意不自动生成 query —— 用模型造题再用模型检索，等于自己给自己出题，数字没意义。');
+      return;
+    }
+
+    if (sub === 'compare') {
+      const r = await evalMod.compare(repo, { k, spec: arg('spec') });
+      const modes = Object.entries(r.results);
+      if (modes[0][1].error) return console.log(modes[0][1].error);
+      console.log(`评测集 ${modes[0][1].overall.n} 题 · 候选池 ${modes[0][1].corpusSize} 条 · recall@${k}` + NL);
+      const types = [...new Set(modes.flatMap(([, v]) => Object.keys(v.byType || {})))];
+      const pct = (x) => (x * 100).toFixed(0).padStart(3) + '%';
+      console.log('模式        总recall  总precision  top1   ' + types.map((t) => t + ' recall').join('  '));
+      for (const [m, v] of modes) {
+        if (v.error) { console.log(m.padEnd(11) + v.error); continue; }
+        console.log(m.padEnd(11) + pct(v.overall.recall) + '      ' + pct(v.overall.precision)
+          + '     ' + pct(v.overall.top1) + '   '
+          + types.map((t) => (v.byType[t] ? pct(v.byType[t].recall) : '  -  ')).join('     '));
+        if (v.degraded) console.log('            ⚠️ 已降级到关键词：' + v.degraded);
+      }
+      return;
+    }
+
+    const r = await evalMod.run(repo, { mode: arg('mode', 'keyword'), k, spec: arg('spec') });
+    if (r.error) return console.log(r.error);
+    console.log(JSON.stringify(r, null, 2));
+  },
+
   mcp() { require('../src/mcp').serve(cwd); },        // L2：MCP stdio server
 
   dashboard() { require('../src/dashboard').serve(cwd); },
@@ -227,6 +277,9 @@ const CMDS = {
        lore mcp               L2：MCP stdio server（Cursor/Codex/Cline…）
        lore watch             L3：git 工作区监听（任何工具）
        lore uninstall         移除 hook
+检索   lore embed             探测 embedding 后端是否可用
+       lore eval init         生成评测集骨架（query 由你填）
+       lore eval compare      三种召回模式对照：keyword / vector / hybrid
 观测   lore dashboard         本地看板 http://127.0.0.1:4519
        lore stats             修正复发率
        lore list              查看已学到的东西
