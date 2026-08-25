@@ -190,6 +190,38 @@ const CMDS = {
     }
   },
 
+  async search() {                 // lore search <自然语言查询>
+    // 必须连带跳过旗标的值。只滤 --xxx 会把 _global、3 这些值当成查询词，
+    // 污染 embedding 后排序整个变样——而且现象很隐蔽，看起来像召回算法不准
+    const q = (() => {
+      const out = [];
+      for (let i = 0; i < rest.length; i++) {
+        if (rest[i].startsWith('--')) { i++; continue; }
+        out.push(rest[i]);
+      }
+      return out.join(' ');
+    })();
+    if (!q) return die('用法: lore search "调用失败要不要重试" [--mode hybrid] [--k 5]');
+    const evalMod2 = require('../src/eval');
+    const recallMod = require('../src/recall');
+    const items = evalMod2.corpus(REPO_OVERRIDE || repoId(cwd));
+    if (!items.length) return console.log('知识库为空');
+
+    // 自然语言查询默认 hybrid：实测 keyword 在这类查询上 recall 为 0，
+    // 而注入路径的查询是文件符号，那里 keyword 已经 100%，所以两条路径默认值不同
+    const mode = arg('mode', 'hybrid');
+    const r = await recallMod.recall(q, items, { mode, topK: Number(arg('k', 5)), spec: arg('spec') });
+    if (r.degraded) console.log('⚠️ 向量后端不可用，已降级到关键词：' + r.degraded + NL);
+    if (!r.rows.length) return console.log('没有召回结果');
+    console.log(`${r.mode} · 候选池 ${items.length} 条` + NL);
+    // RRF 分值天然很小（~0.008），直接显示没有信息量。归一化成"相对最高分"更好读。
+    const top = r.rows[0].score || 1;
+    r.rows.forEach((x, i) => {
+      console.log(`${String(i + 1).padStart(2)}. [${(x.score / top).toFixed(2)}] ${x.item.rule}`);
+      if (x.item.file) console.log('     ' + require('path').basename(x.item.file));
+    });
+  },
+
   async embed() {                  // lore embed   探测 embedding 后端
     const r = await embedMod.probe(arg('spec'));
     console.log(r.ok
@@ -277,7 +309,8 @@ const CMDS = {
        lore mcp               L2：MCP stdio server（Cursor/Codex/Cline…）
        lore watch             L3：git 工作区监听（任何工具）
        lore uninstall         移除 hook
-检索   lore embed             探测 embedding 后端是否可用
+检索   lore search <查询>     自然语言检索知识库，默认 hybrid
+       lore embed             探测 embedding 后端是否可用
        lore eval init         生成评测集骨架（query 由你填）
        lore eval compare      三种召回模式对照：keyword / vector / hybrid
 观测   lore dashboard         本地看板 http://127.0.0.1:4519
