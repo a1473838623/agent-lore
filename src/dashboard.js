@@ -17,6 +17,7 @@ const graphMod = require('./graph');
 const settings = require('./settings');
 const autostart = require('./autostart');
 const updater = require('./update');
+const daemonMod = require('./daemon');
 
 /**
  * 本地看板。
@@ -144,8 +145,14 @@ async function handlePost(url, body, cwd) {
       return body.enable
         ? { ...autostart.enable(body.cwd || cwd, PORT), status: autostart.status() }
         : { ...autostart.disable(), status: autostart.status() };
-    case '/api/update':
-      return body.pull ? updater.pull() : updater.check();
+    case '/api/update': {
+      if (!body.pull) return updater.check();
+      const r = updater.pull();
+      // 更新成功就自动重启，让新代码生效——用户点「立即更新」本就期望它直接生效。
+      // 延迟一下重启，确保这个响应先发回前端，前端好提示「正在重启」。
+      if (r.updated) setTimeout(() => daemonMod.scheduleRestart(cwd, PORT), 500);
+      return { ...r, restarting: !!r.updated };
+    }
     case '/api/why':
       return graphMod.lineage(body.repo || repo, body.key) || { ok: false, why: '未找到' };
     case '/api/scan': {

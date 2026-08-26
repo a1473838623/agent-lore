@@ -311,7 +311,7 @@ function updateLine(u) {
   if (u.remote) bits.push(`远程 ${esc(u.remote)}`);
   let tail = '';
   if (u.offline) tail = `　${esc(u.why)}`;
-  else if (u.updated) tail = `　✅ 已更新 ${esc(u.from)} → ${esc(u.local)}　<b style="color:var(--warn)">重启看板后才生效</b>`;
+  else if (u.updated) tail = `　✅ 已更新 ${esc(u.from)} → ${esc(u.local)}，看板将自动重启`;
   else if (u.behind) tail = `　落后 ${u.behind} 个提交${u.why ? '，' + esc(u.why) : ''}`;
   else tail = '　已是最新';
   if (u.dirty) tail += '　⚠️ 本地有未提交改动';
@@ -338,10 +338,27 @@ async function toggleAutoUpdate() {
 async function checkUpdate(pull) {
   toast(pull ? '正在更新…' : '正在检查…');
   upd = await post('/api/update', { pull });
+  if (upd.restarting) {
+    // 后端更新成功后会自动重启看板，这里等它回来再自动刷新，不用手动重开
+    toast('已更新，正在重启看板…');
+    render();
+    return waitForRestart();
+  }
   toast(!upd.ok ? upd.why
-    : upd.updated ? '已更新，重启看板后生效'
     : upd.behind ? `落后 ${upd.behind} 个提交` : '已是最新');
   render();
+}
+
+/** 轮询等看板重启完成，回来后自动刷新页面 */
+async function waitForRestart() {
+  for (let i = 0; i < 40; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    try {
+      const res = await fetch('/api', { cache: 'no-store' });
+      if (res.ok) { toast('看板已重启，运行新版本'); location.reload(); return; }
+    } catch { /* 重启中，连不上是正常的 */ }
+  }
+  toast('重启超时，请手动刷新页面');
 }
 
 async function setRefresh(ms) {

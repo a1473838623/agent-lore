@@ -106,4 +106,33 @@ async function stop(port) {
   return { ok: false, pid, why: '已发送终止信号但端口 3 秒内未释放' };
 }
 
-module.exports = { start, stop, status, PIDFILE };
+/**
+ * 就地重启当前看板进程。用于「立即更新」后让新代码生效。
+ *
+ * 难点：当前进程自己就占着端口，没法先起新进程再退旧的。
+ * 所以派生一个**独立的引导进程**(脱离当前进程)，它轮询等端口释放后再起新看板；
+ * 然后当前进程主动退出。引导进程用 node 跑一小段 inline 脚本，零额外文件。
+ */
+function scheduleRestart(cwd, port) {
+  const win = process.platform === 'win32';
+  const boot = `
+    const net=require('net'),{spawn}=require('child_process');
+    const port=${port}, bin=${JSON.stringify(BIN)}, cwd=${JSON.stringify(cwd || process.cwd())};
+    const free=()=>new Promise(r=>{const s=net.createServer();
+      s.once('error',()=>r(false));s.once('listening',()=>s.close(()=>r(true)));s.listen(port,'127.0.0.1');});
+    (async()=>{
+      for(let i=0;i<60;i++){ if(await free()) break; await new Promise(r=>setTimeout(r,200)); }
+      const c=spawn(process.execPath,[bin,'dashboard','--cwd',cwd],
+        {cwd,detached:${!win},windowsHide:true,stdio:'ignore',
+         env:{...process.env,AGENT_LORE_PORT:String(port)}});
+      c.unref();
+    })();`;
+  const boot2 = spawn(process.execPath, ['-e', boot], {
+    detached: true, windowsHide: true, stdio: 'ignore',
+  });
+  boot2.unref();
+  // 给引导进程一点时间站稳，再退出自己
+  setTimeout(() => process.exit(0), 300);
+}
+
+module.exports = { start, stop, status, scheduleRestart, PIDFILE };
