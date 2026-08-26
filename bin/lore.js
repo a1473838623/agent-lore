@@ -17,6 +17,7 @@ const specMod = require('../src/spec');
 const applyMod = require('../src/apply');
 const evalMod = require('../src/eval');
 const embedMod = require('../src/embed');
+const graphMod = require('../src/graph');
 
 const NL = String.fromCharCode(10);
 const cwd = process.cwd();
@@ -190,6 +191,71 @@ const CMDS = {
     }
   },
 
+  why() {                          // lore why <ruleKey>   一条规则的完整血缘
+    const key = rest.find((x) => !x.startsWith('--'));
+    if (!key) return die('用法: lore why <ruleKey>   ruleKey 见 lore knowledge');
+    const g = graphMod.lineage(repoId(cwd), key);
+    if (!g) return die('没找到这条规则');
+    console.log(g.rule + NL);
+    console.log('  状态    ' + graphMod.STATE_LABEL[g.state] + ' —— ' + g.why);
+    console.log('  标签    ' + g.tags.join('、'));
+    console.log('  来源    ' + (g.source === 'seed' ? '初始化种入' : g.source === 'bootstrap' ? '代码库归纳' : g.evidence.length + ' 次人工修正'));
+    console.log('  注入    ' + g.injections + ' 次，累计 ' + g.injectedTokens + ' token');
+    console.log('  复发    入库前 ' + g.recurrence.before + ' 次 → 入库后 ' + g.recurrence.after + ' 次');
+    if (g.files.length) console.log('  涉及    ' + g.files.map((f) => require('path').basename(f)).join('、'));
+    if (g.related.length) {
+      console.log(NL + '  相关规范：');
+      g.related.forEach((r) => console.log('    ' + r.sim.toFixed(2) + '  ' + r.existing.slice(0, 70)));
+    }
+    if (g.evidence.length) {
+      console.log(NL + '  证据 diff：');
+      g.evidence.slice(0, 3).forEach((e) => {
+        console.log('    ── ' + (e.file ? require('path').basename(e.file) : '?') + ' ──');
+        String(e.diff || '').split(NL).slice(0, 6).forEach((l) => console.log('    ' + l));
+      });
+    }
+  },
+
+  knowledge() {                    // lore knowledge   知识层总览
+    const repo = repoId(cwd);
+    const lc = graphMod.lifecycle(repo);
+    if (!lc.length) return console.log('知识库为空');
+
+    const by = {};
+    lc.forEach((x) => { (by[x.state] = by[x.state] || []).push(x); });
+    console.log('共 ' + lc.length + ' 条规范' + NL);
+    console.log('生命周期：');
+    for (const [st, rows] of Object.entries(by)) {
+      console.log('  ' + (graphMod.STATE_LABEL[st] || st).padEnd(8) + String(rows.length).padStart(3) + ' 条  ' +
+        '█'.repeat(Math.round(rows.length / lc.length * 24)));
+    }
+
+    // 需要关注的：过时与无效——知识库最大的问题不是存不下，是存了没用的东西
+    const attention = [...(by.stale || []), ...(by.suspect || [])];
+    if (attention.length) {
+      console.log(NL + '⚠️ 需要关注：');
+      attention.forEach((x) => {
+        console.log('  [' + x.key + '] ' + graphMod.STATE_LABEL[x.state] + ' —— ' + x.why);
+        console.log('       ' + x.rule.slice(0, 74));
+      });
+    }
+
+    const cv = graphMod.coverage(repo);
+    console.log(NL + '覆盖地图：');
+    cv.byTag.slice(0, 10).forEach((t) => {
+      const n = t.convention + t.pitfall;
+      console.log('  ' + t.tag.padEnd(12) + String(n).padStart(3) + '  ' + '▪'.repeat(Math.min(n, 20)));
+    });
+    if (cv.gaps.length) console.log('  空白域：' + cv.gaps.join('、') + '  —— 要么没踩过坑，要么踩了没沉淀');
+
+    const gr = graphMod.graph(repo);
+    console.log(NL + '关系：' + gr.nodes.length + ' 节点 / ' + gr.edges.length + ' 边 / ' + gr.isolated + ' 个孤立点');
+    if (gr.isolated > gr.nodes.length * 0.6) {
+      console.log('  孤立点占多数 —— 当前是一堆互不相关的经验，尚未在某个领域成体系');
+    }
+    console.log(NL + '看单条血缘：lore why <ruleKey>');
+  },
+
   async search() {                 // lore search <自然语言查询>
     // 必须连带跳过旗标的值。只滤 --xxx 会把 _global、3 这些值当成查询词，
     // 污染 embedding 后排序整个变样——而且现象很隐蔽，看起来像召回算法不准
@@ -313,6 +379,8 @@ const CMDS = {
        lore embed             探测 embedding 后端是否可用
        lore eval init         生成评测集骨架（query 由你填）
        lore eval compare      三种召回模式对照：keyword / vector / hybrid
+知识   lore knowledge         知识层总览：生命周期 · 覆盖地图 · 关系
+       lore why <ruleKey>     一条规则的完整血缘
 观测   lore dashboard         本地看板 http://127.0.0.1:4519
        lore stats             修正复发率
        lore list              查看已学到的东西

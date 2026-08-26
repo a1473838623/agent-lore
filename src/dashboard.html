@@ -158,6 +158,7 @@ function signature(d) {
     d.conventions.map(c => c.rule), d.pitfalls.map(p => p.rule),
     d.batches.map(b => b.id + b.items.length), d.ready.map(r => r.key + r.count),
     d.candidates.map(c => c.key + c.count), d.stats.totalInjects, d.stats.totalInjectedTokens,
+    [...d.knowledge.lifecycle, ...d.knowledge.globalLifecycle].map(x => x.key + x.state + x.injections),
     d.stats.rules.map(r => r.key + r.before + r.after + r.injected),
   ]);
 }
@@ -231,14 +232,19 @@ function render() {
   }
 
   // ── 观测：tabs ──
+  const kn = d.knowledge;
+  const allLc = [...kn.lifecycle, ...kn.globalLifecycle];
+  const attention = allLc.filter(x => x.state === 'stale' || x.state === 'suspect').length;
+
   const tabs = [
+    ['know', '知识层', attention || null],
     ['conv', '规范', d.conventions.length],
     ['pit', '踩坑', d.pitfalls.length],
     ['cand', '候选进度', d.candidates.length],
     ['eff', '效果', s.rules.length],
   ];
   H.push(`<nav class="tabs">${tabs.map(([k, label, n]) =>
-    `<button class="${tab === k ? 'on' : ''}" onclick="go('${k}')">${label}${n ? ` <span class="pill dim">${n}</span>` : ''}</button>`
+    `<button class="${tab === k ? 'on' : ''}" onclick="go('${k}')">${label}${n ? ` <span class="pill ${k === 'know' ? 'warn' : 'dim'}">${n}</span>` : ''}</button>`
   ).join('')}</nav><div id="panel">${panel()}</div>`);
 
   $('#app').innerHTML = H.join('');
@@ -469,8 +475,128 @@ const tagLine = (it) => (it.tags || []).length > 1
       `<span class="pill dim" style="margin-right:4px">${esc((D.tagLabels || {})[t] || t)}</span>`).join('')}</div>`
   : '';
 
+/**
+ * 知识层视图 —— 文件存储之上的一层，不引入新数据，
+ * 只把已有数据里隐含的关系显式化：生命周期、覆盖分布、关系密度。
+ *
+ * 一个知识库最大的问题不是存不下，是**存了一堆没人用、或用了没效果的东西**，
+ * 而这两种都不会自己冒出来说话。所以「需要关注」置顶。
+ */
+const STATE_CLS = {
+  effective: 'ok', partial: 'warn', suspect: 'bad', stale: 'bad',
+  fresh: 'dim', candidate: 'dim',
+};
+
+function knowledgePanel() {
+  const d = D, kn = d.knowledge;
+  const L = kn.stateLabel;
+  const all = [...kn.lifecycle, ...kn.globalLifecycle];
+  if (!all.length) return `<div class="empty">知识库还是空的</div>`;
+
+  const H = [];
+
+  // ① 需要关注：过时与无效
+  const attention = all.filter(x => x.state === 'stale' || x.state === 'suspect');
+  if (attention.length) {
+    H.push(`<div class="grp" style="color:var(--warn)">需要关注 <span class="pill warn">${attention.length}</span></div>`);
+    for (const x of attention) {
+      H.push(`<div class="card act"><div class="rule">${esc(x.rule)}</div>
+        <div class="hint" style="margin-top:6px"><span class="pill ${STATE_CLS[x.state]}">${esc(L[x.state])}</span>　${esc(x.why)}</div>
+        <div class="acts"><button class="ghost" onclick="showWhy('${x.key}')">看血缘</button></div>
+        <div id="why-${x.key}"></div></div>`);
+    }
+  }
+
+  // ② 生命周期分布
+  const by = {};
+  all.forEach(x => { by[x.state] = (by[x.state] || 0) + 1; });
+  H.push(`<div class="grp">生命周期</div><div class="card">`);
+  for (const [st, n] of Object.entries(by).sort((a, b) => b[1] - a[1])) {
+    H.push(`<div style="display:flex;align-items:center;gap:9px;margin-bottom:5px">
+      <span style="width:64px;font-size:12px;color:var(--dim)">${esc(L[st] || st)}</span>
+      <span style="width:28px;text-align:right;font-variant-numeric:tabular-nums">${n}</span>
+      <span class="bar" style="flex:1;margin:0"><i style="width:${(n / all.length * 100).toFixed(0)}%"></i></span>
+    </div>`);
+  }
+  H.push(`</div>`);
+
+  // ③ 覆盖地图
+  const cv = kn.coverage;
+  H.push(`<div class="grp">覆盖地图 <span class="pill dim">${cv.total} 条</span></div><div class="card">`);
+  const max = Math.max(...cv.byTag.map(t => t.convention + t.pitfall), 1);
+  for (const t of cv.byTag.slice(0, 12)) {
+    const n = t.convention + t.pitfall;
+    H.push(`<div style="display:flex;align-items:center;gap:9px;margin-bottom:5px">
+      <span style="width:88px;font-size:12px;color:var(--dim)">${esc((d.tagLabels || {})[t.tag] || t.tag)}</span>
+      <span style="width:24px;text-align:right;font-variant-numeric:tabular-nums">${n}</span>
+      <span class="bar" style="flex:1;margin:0"><i style="width:${(n / max * 100).toFixed(0)}%"></i></span>
+    </div>`);
+  }
+  if (cv.gaps.length) {
+    H.push(`<div class="hint" style="margin-top:9px">空白域：${cv.gaps.map(g =>
+      `<span class="pill dim" style="margin-right:4px">${esc((d.tagLabels || {})[g] || g)}</span>`).join('')}
+      <br>要么那里没踩过坑，要么踩了没沉淀。<b>空白比密集更有信息量。</b></div>`);
+  }
+  H.push(`</div>`);
+
+  // ④ 关系密度
+  const g = kn.graph;
+  const clustered = g.nodes.length - g.isolated;
+  H.push(`<div class="grp">知识关联</div><div class="card">
+    <div class="meta" style="margin:0"><span>${g.nodes.length} 条规范</span>
+      <span>${g.edges.length} 条关联</span><span>${g.isolated} 个孤立</span></div>
+    <div class="bar" style="margin-top:8px"><i style="width:${(clustered / Math.max(g.nodes.length, 1) * 100).toFixed(0)}%"></i></div>
+    <div class="hint" style="margin-top:7px">${g.isolated > g.nodes.length * 0.6
+      ? '孤立点占多数 —— 当前是一堆互不相关的经验，尚未在某个领域成体系。<b>同一领域的规范互相关联，才构成体系。</b>'
+      : `${clustered} 条已与其它规范关联，知识开始成体系。`}</div>
+  </div>`);
+
+  // ⑤ 全部规范，按状态排序
+  const order = ['suspect', 'stale', 'partial', 'effective', 'fresh', 'candidate'];
+  H.push(`<div class="grp">全部规范</div>`);
+  for (const x of [...all].sort((a, b) => order.indexOf(a.state) - order.indexOf(b.state))) {
+    H.push(`<div class="card"><div class="rule">${esc(x.rule)}</div>
+      <div class="meta" style="margin:8px 0 0">
+        <span class="pill ${STATE_CLS[x.state]}">${esc(L[x.state])}</span>
+        <span>注入 ${x.injections} 次</span>
+        <span>复发 ${x.recurrence.before} → ${x.recurrence.after}</span>
+        <span>${x.source === 'seed' ? '初始化' : x.source === 'bootstrap' ? '代码库归纳' : x.evidence + ' 次修正'}</span>
+        ${x.related ? `<span>${x.related} 条相关</span>` : ''}
+        <button class="ghost" style="padding:0 6px;font-size:11px" onclick="showWhy('${x.key}')">血缘</button>
+      </div><div id="why-${x.key}"></div></div>`);
+  }
+  return H.join('');
+}
+
+/** 展开一条规则的完整血缘：证据 diff、来源文件、相关规范 */
+async function showWhy(key) {
+  const box = document.getElementById('why-' + key);
+  if (!box) return;
+  if (box.innerHTML) { box.innerHTML = ''; return; }
+  const scope = D.knowledge.lifecycle.some(x => x.key === key) ? D.repo : '_global';
+  const g = await post('/api/why', { key, repo: scope });
+  if (!g || g.ok === false) { box.innerHTML = `<div class="hint">${esc((g && g.why) || '未找到')}</div>`; return; }
+  const H = [`<div class="hint" style="margin-top:9px">
+    标签 ${g.tags.map(t => esc((D.tagLabels || {})[t] || t)).join('、')}
+    ${g.files.length ? '　涉及 ' + g.files.map(f => esc(base(f))).join('、') : ''}
+    ${g.injectedTokens ? '　累计注入 ' + g.injectedTokens + ' token' : ''}</div>`];
+  if (g.related.length) {
+    H.push(`<div class="hint" style="margin-top:6px">相关规范：</div>`);
+    g.related.forEach(r => H.push(`<div class="hint">　${r.sim.toFixed(2)}　${esc(r.existing)}</div>`));
+  }
+  if (g.evidence.length) {
+    H.push(`<div class="hint" style="margin-top:6px">证据 diff：</div>`);
+    g.evidence.slice(0, 2).forEach(e => H.push(
+      `<div class="hint" style="margin-top:4px">── ${esc(base(e.file || '?'))} ──</div>` + diffHtml(e.diff || '')));
+  } else {
+    H.push(`<div class="hint" style="margin-top:6px">无证据 diff —— 这条是初始化或代码库归纳得来的</div>`);
+  }
+  box.innerHTML = H.join('');
+}
+
 function panel() {
   const d = D, s = d.stats;
+  if (tab === 'know') return knowledgePanel();
   if (tab === 'conv') {
     if (!d.conventions.length) return `<div class="empty">还没有已确认的规范</div>`;
     const scoped = byScope(d.conventions);

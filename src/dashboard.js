@@ -13,6 +13,7 @@ const injectMod = require('./inject');
 const detect = require('./detect');
 const tags = require('./tags');
 const batch = require('./batch');
+const graphMod = require('./graph');
 
 /**
  * 本地看板。
@@ -76,6 +77,22 @@ function data(cwd) {
     autoRule: TUNING.autoPromote,
     hasApiKey: !!process.env.ANTHROPIC_API_KEY,
     candidates: pendingRules,
+    // 知识层：建在文件存储之上，把已有数据里隐含的关系显式化
+    knowledge: {
+      lifecycle: graphMod.lifecycle(repo).map((x) => ({
+        key: x.key, rule: x.rule, state: x.state, why: x.why, tags: x.tags,
+        injections: x.injections, recurrence: x.recurrence, evidence: x.evidence.length,
+        files: x.files.length, related: x.related.length, source: x.source,
+      })),
+      globalLifecycle: repo === GLOBAL ? [] : graphMod.lifecycle(GLOBAL).map((x) => ({
+        key: x.key, rule: x.rule, state: x.state, why: x.why, tags: x.tags,
+        injections: x.injections, recurrence: x.recurrence, evidence: x.evidence.length,
+        files: x.files.length, related: x.related.length, source: x.source,
+      })),
+      coverage: graphMod.coverage(repo === GLOBAL ? [GLOBAL] : [repo, GLOBAL]),
+      graph: graphMod.graph(repo === GLOBAL ? [GLOBAL] : [repo, GLOBAL]),
+      stateLabel: graphMod.STATE_LABEL,
+    },
     stats: {
       ...s,
       rules: [
@@ -116,6 +133,8 @@ async function handlePost(url, body, cwd) {
       return apply.confirmPromotion(repo, body.key);
     case '/api/auto':
       return apply.autoAttribute(repo, cwd);
+    case '/api/why':
+      return graphMod.lineage(body.repo || repo, body.key) || { ok: false, why: '未找到' };
     case '/api/scan': {
       const r = detect.scan(cwd);
       return { ok: true, found: r.found.filter((f) => !f.skipped).length };
