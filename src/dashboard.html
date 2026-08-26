@@ -104,6 +104,7 @@ nav.tabs button:hover{color:var(--fg)}
 
 .bar{height:4px;background:var(--line2);border-radius:3px;overflow:hidden;margin-top:7px}
 .bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.bar i.ok{background:var(--ok)}.bar i.bad{background:var(--bad)}.bar i.dim{background:var(--faint)}
 
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:11px}
 .chip{border:1px solid var(--line);background:var(--panel);color:var(--dim);
@@ -159,6 +160,7 @@ function signature(d) {
     d.batches.map(b => b.id + b.items.length), d.ready.map(r => r.key + r.count),
     d.candidates.map(c => c.key + c.count), d.stats.totalInjects, d.stats.totalInjectedTokens,
     [...d.knowledge.lifecycle, ...d.knowledge.globalLifecycle].map(x => x.key + x.state + x.injections),
+    islandBy, islandOpen,
     JSON.stringify(d.settings), JSON.stringify(d.autostart),
     d.stats.rules.map(r => r.key + r.before + r.after + r.injected),
   ]);
@@ -243,10 +245,10 @@ function render() {
 
   const tabs = [
     ['know', '知识层', attention || null],
-    ['conv', '规范', d.conventions.length],
-    ['pit', '踩坑', d.pitfalls.length],
+    ['conv', '全局规范', d.conventions.length],
+    ['pit', '局部规范', d.pitfalls.length],
     ['cand', '候选进度', d.candidates.length],
-    ['eff', '效果', s.rules.length],
+    ['eff', '评估', s.rules.length],
   ];
   H.push(`<nav class="tabs">${tabs.map(([k, label, n]) =>
     `<button class="${tab === k ? 'on' : ''}" onclick="go('${k}')">${label}${n ? ` <span class="pill ${k === 'know' ? 'warn' : 'dim'}">${n}</span>` : ''}</button>`
@@ -655,32 +657,62 @@ function knowledgePanel() {
   H.push(`</div>`);
 
   // ④ 关系密度
-  const g = kn.graph;
-  const clustered = g.nodes.length - g.isolated;
-  H.push(`<div class="grp">知识关联</div><div class="card">
-    <div class="meta" style="margin:0"><span>${g.nodes.length} 条规范</span>
-      <span>${g.edges.length} 条关联</span><span>${g.isolated} 个孤立</span></div>
-    <div class="bar" style="margin-top:8px"><i style="width:${(clustered / Math.max(g.nodes.length, 1) * 100).toFixed(0)}%"></i></div>
-    <div class="hint" style="margin-top:7px">${g.isolated > g.nodes.length * 0.6
-      ? '孤立点占多数 —— 当前是一堆互不相关的经验，尚未在某个领域成体系。<b>同一领域的规范互相关联，才构成体系。</b>'
-      : `${clustered} 条已与其它规范关联，知识开始成体系。`}</div>
-  </div>`);
-
-  // ⑤ 全部规范，按状态排序
-  const order = ['suspect', 'stale', 'partial', 'effective', 'fresh', 'candidate'];
-  H.push(`<div class="grp">全部规范</div>`);
-  for (const x of [...all].sort((a, b) => order.indexOf(a.state) - order.indexOf(b.state))) {
-    H.push(`<div class="card"><div class="rule">${esc(x.rule)}</div>
-      <div class="meta" style="margin:8px 0 0">
-        <span class="pill ${STATE_CLS[x.state]}">${esc(L[x.state])}</span>
-        <span>注入 ${x.injections} 次</span>
-        <span>复发 ${x.recurrence.before} → ${x.recurrence.after}</span>
-        <span>${x.source === 'seed' ? '初始化' : x.source === 'bootstrap' ? '代码库归纳' : x.evidence + ' 次修正'}</span>
-        ${x.related ? `<span>${x.related} 条相关</span>` : ''}
-        <button class="ghost" style="padding:0 6px;font-size:11px" onclick="showWhy('${x.key}')">溯源</button>
-      </div><div id="why-${x.key}"></div></div>`);
-  }
+  // ④ 知识岛 —— 把知识库按某维度切成若干块，看每块成不成体系
+  H.push(islandSection(kn));
   return H.join('');
+}
+
+/**
+ * 知识岛：按 技术域/文件/全局局部 三个维度切开，每个岛回答
+ * 「这块知识规模多大、健不健康、成不成体系」。
+ * 这是「知识库」区别于「一张规则表」的地方。
+ */
+let islandBy = 'domain';   // domain | file | scope
+let islandOpen = null;     // 当前展开的岛名
+const ISLAND_BY = { domain: '技术域', file: '文件', scope: '全局/局部' };
+
+function islandSection(kn) {
+  const L = kn.stateLabel || {};
+  const data = (kn.islands || {})[islandBy];
+  if (!data || !data.islands.length) return '<div class="empty">还没有可归类的知识</div>';
+
+  const chips = Object.entries(ISLAND_BY).map(([k, label]) =>
+    `<button class="chip ${islandBy === k ? 'on' : ''}" onclick="islandBy='${k}';render()">${label}</button>`).join('');
+
+  const cards = data.islands.map((isl, idx) => {
+    // 体系度：岛内规则互相关联的比例。低=一堆碎片，高=成网
+    const cohesionPct = Math.round(isl.cohesion * 100);
+    const health = isl.stale > 0 ? 'bad' : isl.total >= 3 && isl.cohesion >= 0.5 ? 'ok' : 'dim';
+    const badge = isl.stale > 0 ? `<span class="pill bad">${isl.stale} 条待清理</span>`
+      : isl.total >= 3 && isl.cohesion >= 0.5 ? '<span class="pill ok">成体系</span>'
+      : isl.total === 1 ? '<span class="pill dim">孤立</span>'
+      : '<span class="pill dim">松散</span>';
+    const open = islandOpen === isl.name;
+    return `<div class="card">
+      <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="islandOpen=${open ? 'null' : `'${esc(isl.name).replace(/'/g, "\\'")}'`};render()">
+        <b>${esc((D.tagLabels || {})[isl.name] || isl.name)}</b>
+        <span class="pill dim">${isl.total} 条</span>${badge}
+        <span style="flex:1"></span>
+        <span class="hint">规范 ${isl.convention} · 坑 ${isl.pitfall}${isl.cohesion ? ' · 体系度 ' + cohesionPct + '%' : ''}</span>
+        <span style="color:var(--faint)">${open ? '▲' : '▼'}</span>
+      </div>
+      <div class="bar" style="margin-top:8px"><i class="${health}" style="width:${Math.max(cohesionPct, 6)}%"></i></div>
+      ${open ? `<div style="margin-top:10px">${isl.rules.map(r =>
+        `<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-top:1px solid var(--line2)">
+          <span class="pill ${STATE_CLS[r.state] || 'dim'}" style="flex-shrink:0">${esc(L[r.state] || r.state)}</span>
+          <span style="font-size:12.5px;flex:1">${esc(r.rule)}</span>
+          <button class="ghost" style="padding:0 6px;font-size:11px;flex-shrink:0" onclick="event.stopPropagation();showWhy('${r.key}')">溯源</button>
+        </div><div id="why-${r.key}"></div>`).join('')}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  return `<div class="grp">知识岛 —— 按什么切</div>
+    <div class="chips">${chips}</div>
+    <div class="hint" style="margin:-4px 0 10px">${
+      islandBy === 'domain' ? '按技术域看：哪类技术上沉淀了知识，哪块还是碎片。'
+      : islandBy === 'file' ? '按文件看：改某个文件时会触发哪些知识。'
+      : '按范围看：哪些是通用规范(全局)，哪些绑定具体文件(局部)。'}</div>
+    ${cards}`;
 }
 
 /** 展开一条规则的溯源：证据 diff、来源文件、相关规范 */
@@ -730,10 +762,14 @@ function panel() {
         <div class="meta" style="margin:7px 0 0"><span>${esc(base(p.file))}</span></div>${tagLine(p)}</div>`);
   }
   if (tab === 'cand') {
-    if (!d.candidates.length) return `<div class="empty">还没有候选规范。候选累计 ${d.threshold} 次才会升格</div>`;
-    return d.candidates.map(c => {
+    if (!d.candidates.length) return `<div class="empty">还没有候选规范。同类规范累计 ${d.threshold} 次才会升格</div>`;
+    return `<div class="hint" style="margin-bottom:11px">这里都是<b>全局规范</b>的候选 ——
+      同一条规范在不同文件里被修正累计 ${d.threshold} 次才升格入库。
+      局部规范(单文件的坑)当场记录，不经过这里排队。</div>`
+      + d.candidates.map(c => {
       const pct = Math.min(100, Math.round(c.count / c.threshold * 100));
-      return `<div class="card"><div class="rule">${esc(c.rule)}</div>
+      return `<div class="card"><div class="rule">${esc(c.rule)}
+          <span class="pill dim" style="margin-left:5px">→ 全局规范</span></div>
         <div class="meta" style="margin:8px 0 0"><span>${c.count} / ${c.threshold} 次</span>
           <span>${c.files.length} 个文件</span></div>
         <div class="bar"><i style="width:${pct}%"></i></div></div>`;

@@ -95,6 +95,12 @@ function data(cwd) {
       })),
       coverage: graphMod.coverage(repo === GLOBAL ? [GLOBAL] : [repo, GLOBAL]),
       graph: graphMod.graph(repo === GLOBAL ? [GLOBAL] : [repo, GLOBAL]),
+      // 知识岛：三个维度都算好，前端切换不用回后端
+      islands: {
+        domain: graphMod.islands(repo === GLOBAL ? [GLOBAL] : [repo, GLOBAL], { by: 'domain' }),
+        file: graphMod.islands(repo === GLOBAL ? [GLOBAL] : [repo, GLOBAL], { by: 'file' }),
+        scope: graphMod.islands(repo === GLOBAL ? [GLOBAL] : [repo, GLOBAL], { by: 'scope' }),
+      },
       stateLabel: graphMod.STATE_LABEL,
     },
     stats: {
