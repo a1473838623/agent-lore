@@ -617,7 +617,7 @@ function knowledgePanel() {
     for (const x of attention) {
       H.push(`<div class="card act"><div class="rule">${esc(x.rule)}</div>
         <div class="hint" style="margin-top:6px"><span class="pill ${STATE_CLS[x.state]}">${esc(L[x.state])}</span>　${esc(x.why)}</div>
-        <div class="acts"><button class="ghost" onclick="showWhy('${x.key}')">看血缘</button></div>
+        <div class="acts"><button class="ghost" onclick="showWhy('${x.key}')">溯源</button></div>
         <div id="why-${x.key}"></div></div>`);
     }
   }
@@ -677,13 +677,13 @@ function knowledgePanel() {
         <span>复发 ${x.recurrence.before} → ${x.recurrence.after}</span>
         <span>${x.source === 'seed' ? '初始化' : x.source === 'bootstrap' ? '代码库归纳' : x.evidence + ' 次修正'}</span>
         ${x.related ? `<span>${x.related} 条相关</span>` : ''}
-        <button class="ghost" style="padding:0 6px;font-size:11px" onclick="showWhy('${x.key}')">血缘</button>
+        <button class="ghost" style="padding:0 6px;font-size:11px" onclick="showWhy('${x.key}')">溯源</button>
       </div><div id="why-${x.key}"></div></div>`);
   }
   return H.join('');
 }
 
-/** 展开一条规则的完整血缘：证据 diff、来源文件、相关规范 */
+/** 展开一条规则的溯源：证据 diff、来源文件、相关规范 */
 async function showWhy(key) {
   const box = document.getElementById('why-' + key);
   if (!box) return;

@@ -197,7 +197,7 @@ const CMDS = {
     }
   },
 
-  why() {                          // lore why <ruleKey>   一条规则的完整血缘
+  why() {                          // lore why <ruleKey>   一条规则的来源与证据
     const key = rest.find((x) => !x.startsWith('--'));
     if (!key) return die('用法: lore why <ruleKey>   ruleKey 见 lore knowledge');
     const g = graphMod.lineage(repoId(cwd), key);
@@ -259,7 +259,7 @@ const CMDS = {
     if (gr.isolated > gr.nodes.length * 0.6) {
       console.log('  孤立点占多数 —— 当前是一堆互不相关的经验，尚未在某个领域成体系');
     }
-    console.log(NL + '看单条血缘：lore why <ruleKey>');
+    console.log(NL + '看单条溯源：lore why <ruleKey>');
   },
 
   async search() {                 // lore search <自然语言查询>
@@ -471,7 +471,7 @@ const CMDS = {
   lore eval init         生成评测集骨架    lore eval compare  三种召回对照
 
 知识层
-  lore knowledge         生命周期·覆盖·关系   lore why <ruleKey>  单条规则血缘
+  lore knowledge         生命周期·覆盖·关系   lore why <ruleKey>  单条规则溯源
 
 系统
   lore autostart on|off  开机自启          lore update [--pull]  更新 agent-lore

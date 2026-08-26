@@ -13,12 +13,12 @@ const { TUNING } = require('./config');
  * 和别的规则什么关系、现在还有没有用。
  *
  * 这一层不引入任何新数据，只把已有数据里**隐含的关系**显式化：
- *   血缘 lineage    —— 规则 ← 证据 diff ← 来源文件
+ *   溯源 lineage    —— 规则 ← 证据 diff ← 来源文件
  *   覆盖 coverage   —— 知识在技术域上的分布，以及空白区
  *   生命周期 lifecycle —— 规则当前是否还有效
  */
 
-/** 规则的完整血缘：它是怎么来的、被用过几次、有没有用 */
+/** 规则的溯源：它是怎么来的、被用过几次、有没有用 */
 function lineage(repo, ruleKey) {
   const conv = store.getConventions(repo).split(String.fromCharCode(10));
   let rule = null;
