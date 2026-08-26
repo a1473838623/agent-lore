@@ -29,10 +29,10 @@ function readJsonl(file) {
 function repoId(cwd) {
   try {
     const root = execFileSync('git', ['rev-parse', '--show-toplevel'],
-      { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim();
     try {
       const remote = execFileSync('git', ['remote', 'get-url', 'origin'],
-        { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim();
       const m = remote.match(/([^/:]+\/[^/]+?)(\.git)?$/);
       if (m) return m[1].replace(/\//g, '__');
     } catch { /* 没有 remote，退回目录名 */ }
@@ -45,7 +45,7 @@ function repoId(cwd) {
 function gitRoot(cwd) {
   try {
     return execFileSync('git', ['rev-parse', '--show-toplevel'],
-      { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim();
   } catch { return null; }
 }
 

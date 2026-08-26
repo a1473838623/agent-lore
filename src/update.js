@@ -15,6 +15,7 @@ function git(args, opts = {}) {
   return execFileSync('git', args, {
     cwd: ROOT, encoding: 'utf8', timeout: opts.timeout || 15000,
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,   // 不加就每次调 git 闪一个 cmd 窗口——看板每 5 秒刷新会踩到
   }).trim();
 }
 

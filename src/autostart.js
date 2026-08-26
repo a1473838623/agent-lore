@@ -110,7 +110,7 @@ function enable(cwd, port) {
   try {
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.writeFileSync(f, body(cwd, port || 4519), 'utf8');
-    if (process.platform === 'darwin') { try { execFileSync('launchctl', ['load', f]); } catch { /* 已加载 */ } }
+    if (process.platform === 'darwin') { try { execFileSync('launchctl', ['load', f], { windowsHide: true }); } catch { /* 已加载 */ } }
   } catch (e) {
     // 不绕过：如实返回失败原因，UI 会显示并把开关拨回去
     return { ok: false, file: f, message: e.message.split('\n')[0] };
@@ -123,7 +123,7 @@ function enable(cwd, port) {
 function disable() {
   const f = target();
   try { fs.unlinkSync(f); } catch { /* 本来就没有 */ }
-  if (process.platform === 'darwin') { try { execFileSync('launchctl', ['unload', f]); } catch { /* ignore */ } }
+  if (process.platform === 'darwin') { try { execFileSync('launchctl', ['unload', f], { windowsHide: true }); } catch { /* ignore */ } }
   settings.save({ autostart: false });
   return { ok: true, file: f };
 }
