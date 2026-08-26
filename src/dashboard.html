@@ -751,10 +751,13 @@ function panel() {
     + grouped(byTag(byScope(s.rules)), r => {
       const cls = r.verdict.startsWith('✅') ? 'ok' : r.verdict.startsWith('🟡') ? 'warn'
                 : r.verdict.startsWith('❌') ? 'bad' : 'dim';
+      // 只有从人工修正累积的规范才有入库前基线；seed/bootstrap 的不显示复发数字，
+      // 否则 0→0 会被误读成"规范没用"
+      const recur = r.measurable
+        ? `<span>入库前 ${r.before} 次 → 入库后 ${r.after} 次</span><span>注入 ${r.injected} 次</span>`
+        : `<span>注入 ${r.injected} 次</span>`;
       return `<div class="card"><div class="rule">${esc(r.rule)}${scopePill(r)}</div>
-        <div class="meta" style="margin:8px 0 0">
-          <span>入库前 ${r.before} 次 → 入库后 ${r.after} 次</span>
-          <span>注入 ${r.injected} 次</span></div>
+        <div class="meta" style="margin:8px 0 0">${recur}</div>
         <div style="margin-top:7px"><span class="pill ${cls}">${esc(r.verdict)}</span>${
           (r.tags || []).map(t => `<span class="pill dim" style="margin-left:4px">${
             esc((D.tagLabels || {})[t] || t)}</span>`).join('')}</div></div>`;

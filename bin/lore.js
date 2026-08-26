@@ -161,7 +161,11 @@ const CMDS = {
     if (!s.rules.length) return console.log('还没有已入库的规范');
     console.log('\n修正复发率：');
     for (const r of s.rules) {
-      console.log(`  [${r.key}] 入库前 ${r.before} 次 → 入库后 ${r.after} 次  (注入 ${r.injected} 次)  ${r.verdict}`);
+      // seed/bootstrap 的规范没有入库前基线，不显示 0→0 的复发数字
+      const recur = r.measurable
+        ? `入库前 ${r.before} 次 → 入库后 ${r.after} 次  (注入 ${r.injected} 次)`
+        : `注入 ${r.injected} 次`;
+      console.log(`  [${r.key}] ${recur}  ${r.verdict}`);
       console.log(`     ${r.rule}`);
     }
   },

@@ -23,14 +23,23 @@ function stats(repo) {
     const before = corrections.filter((c) => sameRule(c, p) && c.at < p.at).length;
     const after = corrections.filter((c) => sameRule(c, p) && c.at >= p.at).length;
     const injected = injects.filter((i) => (i.keys || []).includes(p.key)).length;
+
+    // 复发率只对「从人工修正累积而来」的规范有意义 —— 它才有入库前基线。
+    // seed(手动种入) / bootstrap(代码库归纳) 来的规范从没经历过人工修正，
+    // before 恒为 0，拿它算复发率是无意义的 0→0，会被误读成"规范没用"。
+    const source = p.source || 'correction';
+    const measurable = source === 'correction';
+
     return {
       key: p.key,
       rule: p.rule,
+      source,
+      measurable,
       before,
       after,
       injected,
-      // 注入次数为 0 时不能下结论 —— 这就是"区分①和②"的地方
-      verdict: injected === 0 ? '未注入过，无法判定'
+      verdict: !measurable ? (source === 'seed' ? '初始化种入，无复发基线' : '代码库归纳，无复发基线')
+             : injected === 0 ? '尚未注入，无法判定'
              : after === 0 ? '✅ 未复发'
              : after < before ? '🟡 复发减少'
              : '❌ 仍在复发，规范可能无效',
