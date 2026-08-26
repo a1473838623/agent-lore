@@ -59,9 +59,14 @@ async function start(cwd, port) {
 
   const args = [BIN, 'dashboard'];
   if (cwd) args.push('--cwd', cwd);
+  // Windows 上必须 windowsHide:true，否则子进程会闪一个控制台黑窗口——
+  // stdio:'ignore' 挡不住它。而 detached:true 在 Windows 反而会新开一个控制台，
+  // 所以 Windows 不 detached；类 Unix 才 detached 以脱离终端。
+  const win = process.platform === 'win32';
   const child = spawn(process.execPath, args, {
     cwd: cwd || process.cwd(),
-    detached: true,                    // 脱离父进程，终端关掉也不会带走它
+    detached: !win,
+    windowsHide: true,
     stdio: 'ignore',
     env: { ...process.env, AGENT_LORE_PORT: String(port) },
   });
