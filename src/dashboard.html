@@ -159,6 +159,7 @@ function signature(d) {
     d.batches.map(b => b.id + b.items.length), d.ready.map(r => r.key + r.count),
     d.candidates.map(c => c.key + c.count), d.stats.totalInjects, d.stats.totalInjectedTokens,
     [...d.knowledge.lifecycle, ...d.knowledge.globalLifecycle].map(x => x.key + x.state + x.injections),
+    JSON.stringify(d.settings), JSON.stringify(d.autostart),
     d.stats.rules.map(r => r.key + r.before + r.after + r.injected),
   ]);
 }
@@ -243,6 +244,8 @@ function render() {
     ['cand', '候选进度', d.candidates.length],
     ['eff', '效果', s.rules.length],
   ];
+  H.push(settingsBar(d));
+
   H.push(`<nav class="tabs">${tabs.map(([k, label, n]) =>
     `<button class="${tab === k ? 'on' : ''}" onclick="go('${k}')">${label}${n ? ` <span class="pill ${k === 'know' ? 'warn' : 'dim'}">${n}</span>` : ''}</button>`
   ).join('')}</nav><div id="panel">${panel()}</div>`);
@@ -252,6 +255,114 @@ function render() {
 
 const stat = (v, label, hot) =>
   `<div class="stat${hot ? ' hot' : ''}"><b>${v}</b><span>${label}</span></div>`;
+
+/* ── 设置 ── */
+let settingsOpen = false;
+let upd = null;    // 最近一次更新检查结果
+
+function settingsBar(d) {
+  const st = d.settings || {}, as = d.autostart || {};
+  const summary = [
+    as.enabled ? '自启 开' : '自启 关',
+    st.autoUpdate ? '自动更新 开' : '自动更新 关',
+    st.refreshMs ? `刷新 ${st.refreshMs / 1000}s` : '刷新 关',
+  ].join('　·　');
+
+  if (!settingsOpen) {
+    return `<div class="hint" style="text-align:right;margin:-6px 0 12px">
+      ${esc(summary)}　<button class="ghost" style="padding:1px 7px;font-size:11.5px"
+        onclick="settingsOpen=true;render()">设置</button>
+      ${as.drift ? '<span class="pill bad" style="margin-left:6px">配置与实际不一致</span>' : ''}
+    </div>`;
+  }
+
+  const sw = (on, fn, label) =>
+    `<button class="${on ? 'primary' : ''}" onclick="${fn}" style="min-width:52px">${on ? '开' : '关'}</button>
+     <span style="flex:1">${label}</span>`;
+
+  return `<div class="card" style="margin-bottom:14px">
+    <div class="meta" style="margin-bottom:10px"><span><b style="color:var(--fg)">设置</b></span>
+      <span style="flex:1"></span>
+      <button class="ghost" style="padding:0 6px" onclick="settingsOpen=false;render()">收起</button></div>
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:9px">
+      ${sw(as.enabled, 'toggleAutostart()', '开机自启看板')}
+    </div>
+    <div class="hint" style="margin:-4px 0 12px 62px">
+      ${as.enabled
+        ? `已固化仓库目录 <code>${esc(as.cwd || '')}</code><br>
+           看板按仓库作用域，用启动文件夹的路径会显示成空仓库，所以启用时把当前目录写死进脚本了。`
+        : `启用后会在开机启动项写一个隐藏启动脚本，并**固化当前仓库目录**
+           <code>${esc(d.repo)}</code>。`}
+      ${as.platform === 'win32' ? '<br>脚本用 .vbs 而非 .bat —— bat 会闪一个黑窗口。' : ''}
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:9px">
+      ${sw(st.autoUpdate, 'toggleAutoUpdate()', 'agent-lore 自动更新')}
+      <button class="ghost" onclick="checkUpdate(false)">检查</button>
+      <button class="ghost" onclick="checkUpdate(true)">立即更新</button>
+    </div>
+    <div class="hint" style="margin:-4px 0 12px 62px">
+      ${upd ? updateLine(upd) : '只用 <code>git pull --ff-only</code>：本地有未提交改动或未推送提交时会停下来交给你处理，不自动 merge。'}
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="min-width:52px;font-size:12px;color:var(--dim)">刷新</span>
+      <span style="flex:1">
+        ${[[0, '关闭'], [5000, '5 秒'], [15000, '15 秒'], [60000, '1 分钟']].map(([v, l]) =>
+          `<button class="chip ${st.refreshMs === v ? 'on' : ''}" style="margin-right:5px"
+            onclick="setRefresh(${v})">${l}</button>`).join('')}
+      </span>
+    </div>
+    <div class="hint" style="margin:6px 0 0 62px">填表期间自动暂停刷新，不会把正在输入的内容冲掉。</div>
+  </div>`;
+}
+
+function updateLine(u) {
+  if (!u.ok) return `❌ ${esc(u.why)}`;
+  const bits = [`分支 ${esc(u.branch)}`, `本地 ${esc(u.local)}`];
+  if (u.remote) bits.push(`远程 ${esc(u.remote)}`);
+  let tail = '';
+  if (u.offline) tail = `　${esc(u.why)}`;
+  else if (u.updated) tail = `　✅ 已更新 ${esc(u.from)} → ${esc(u.local)}　<b style="color:var(--warn)">重启看板后才生效</b>`;
+  else if (u.behind) tail = `　落后 ${u.behind} 个提交${u.why ? '，' + esc(u.why) : ''}`;
+  else tail = '　已是最新';
+  if (u.dirty) tail += '　⚠️ 本地有未提交改动';
+  if (u.ahead) tail += `　本地领先 ${u.ahead} 个提交`;
+  return bits.join('　') + tail;
+}
+
+async function toggleAutostart() {
+  const on = !(D.autostart || {}).enabled;
+  const r = await post('/api/autostart', { enable: on, cwd: null });
+  // 和 beacon 一样：失败就显示原因，开关状态由 load() 拨回真实值
+  if (on && r && r.ok === false) toast('启用失败：' + (r.message || '被安全软件拦截'));
+  else toast(on ? '开机自启已启用，开机后无窗口后台运行' : '已关闭开机自启');
+  load(true);
+}
+
+async function toggleAutoUpdate() {
+  const on = !(D.settings || {}).autoUpdate;
+  await post('/api/settings', { autoUpdate: on });
+  toast(on ? '启动时会自动检查并快进更新' : '已关闭自动更新');
+  load(true);
+}
+
+async function checkUpdate(pull) {
+  toast(pull ? '正在更新…' : '正在检查…');
+  upd = await post('/api/update', { pull });
+  toast(!upd.ok ? upd.why
+    : upd.updated ? '已更新，重启看板后生效'
+    : upd.behind ? `落后 ${upd.behind} 个提交` : '已是最新');
+  render();
+}
+
+async function setRefresh(ms) {
+  await post('/api/settings', { refreshMs: ms });
+  applyRefresh(ms);
+  toast(ms ? `刷新间隔 ${ms / 1000} 秒` : '已关闭自动刷新');
+  load(true);
+}
 
 /**
  * 需求边界区 —— 按会话分别设置。
@@ -752,6 +863,12 @@ async function clearScope(sessionId) {
   toast('已结束'); load(true);
 }
 
-load(true);
-setInterval(() => load(false), 5000);
+/** 刷新间隔可配。0 = 关闭轮询——有人不想让它一直转 */
+let refreshTimer = null;
+function applyRefresh(ms) {
+  clearInterval(refreshTimer);
+  refreshTimer = ms ? setInterval(() => load(false), ms) : null;
+}
+
+load(true).then(() => applyRefresh((D.settings || {}).refreshMs ?? 5000));
 </script>

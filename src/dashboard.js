@@ -14,6 +14,9 @@ const detect = require('./detect');
 const tags = require('./tags');
 const batch = require('./batch');
 const graphMod = require('./graph');
+const settings = require('./settings');
+const autostart = require('./autostart');
+const updater = require('./update');
 
 /**
  * 本地看板。
@@ -100,6 +103,8 @@ function data(cwd) {
         ...(repo === GLOBAL ? [] : withTags(metrics.stats(GLOBAL).rules).map((r) => ({ ...r, scope: 'global' }))),
       ],
     },
+    settings: settings.load(),
+    autostart: autostart.status(),
     tagLabels: tags.LABEL,
   };
 }
@@ -133,6 +138,14 @@ async function handlePost(url, body, cwd) {
       return apply.confirmPromotion(repo, body.key);
     case '/api/auto':
       return apply.autoAttribute(repo, cwd);
+    case '/api/settings':
+      return { ok: true, settings: settings.save(body) };
+    case '/api/autostart':
+      return body.enable
+        ? { ...autostart.enable(body.cwd || cwd, PORT), status: autostart.status() }
+        : { ...autostart.disable(), status: autostart.status() };
+    case '/api/update':
+      return body.pull ? updater.pull() : updater.check();
     case '/api/why':
       return graphMod.lineage(body.repo || repo, body.key) || { ok: false, why: '未找到' };
     case '/api/scan': {
@@ -152,6 +165,19 @@ async function handlePost(url, body, cwd) {
 
 function serve(cwd) {
   const page = fs.readFileSync(path.join(__dirname, 'dashboard.html'), 'utf8');
+
+  // 启动时自动更新。放在监听之前跑完，因为快进成功后当前进程加载的还是旧代码，
+  // 得让用户看到"需要重启"这句话，而不是以为已经生效了。
+  if (settings.load().autoUpdate) {
+    try {
+      const r = updater.pull();
+      if (r.updated) {
+        console.log(`[lore] 已更新 ${r.from} → ${r.local}，重启看板后生效`);
+      } else if (r.behind) {
+        console.log(`[lore] 有 ${r.behind} 个新提交但未更新：${r.why}`);
+      }
+    } catch (e) { console.log('[lore] 自动更新跳过：' + e.message); }
+  }
 
   const server = http.createServer(async (req, res) => {
     const json = (obj) => {

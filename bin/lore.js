@@ -18,6 +18,10 @@ const applyMod = require('../src/apply');
 const evalMod = require('../src/eval');
 const embedMod = require('../src/embed');
 const graphMod = require('../src/graph');
+const settingsMod = require('../src/settings');
+const autostartMod = require('../src/autostart');
+const updateMod = require('../src/update');
+const daemonMod = require('../src/daemon');
 
 const NL = String.fromCharCode(10);
 const cwd = process.cwd();
@@ -25,7 +29,9 @@ const cwd = process.cwd();
 const REPO_OVERRIDE = (() => { const i = process.argv.indexOf('--repo'); return i >= 0 ? process.argv[i + 1] : null; })();
 const [, , cmd, ...rest] = process.argv;
 const arg = (n, d) => { const i = rest.indexOf('--' + n); return i >= 0 ? rest[i + 1] : d; };
-const has = (n) => rest.includes('--' + n);
+// 单字母旗标也认单横杠：`-d` 是后台启动的通行写法，只匹配 `--d` 会让它静默落到前台分支，
+// 现象是"敲了 -d 却卡住不返回"，看起来像程序挂了
+const has = (n) => rest.includes('--' + n) || (n.length === 1 && rest.includes('-' + n));
 
 const CMDS = {
   // —— 采集 ——
@@ -337,7 +343,70 @@ const CMDS = {
 
   mcp() { require('../src/mcp').serve(cwd); },        // L2：MCP stdio server
 
-  dashboard() { require('../src/dashboard').serve(cwd); },
+  async dashboard() {              // lore dashboard [-d|--stop|--restart|--status]
+    const PORT = Number(process.env.AGENT_LORE_PORT || 4519);
+
+    // 后台启停，对齐 agent-beacon 的 start -d / stop。
+    // 这是主路径：看板是"想看时才看"的东西，不必常驻，也不必碰系统启动项。
+    if (has('stop') || has('restart')) {
+      const r = await daemonMod.stop(PORT);
+      console.log(r.ok ? (r.already ? '看板本来就没在跑' : '✅ 已停止 PID=' + r.pid) : '❌ ' + r.why);
+      if (!has('restart')) return;
+    }
+    if (has('status')) {
+      const st = await daemonMod.status(PORT);
+      console.log(st.running ? `✅ 运行中 PID=${st.pid}  ${st.url}`
+        : st.orphanPort ? `⚠️ 端口 ${PORT} 被占用，但不是本工具启的进程`
+        : '未运行');
+      return;
+    }
+    if (has('d') || has('daemon') || has('restart')) {
+      const r = await daemonMod.start(arg('cwd', cwd), PORT);
+      console.log(r.ok ? (r.already ? '看板已在运行  ' + r.url : '✅ 已后台启动 PID=' + r.pid + '  ' + r.url)
+        : '❌ ' + r.why);
+      return;
+    }
+
+    // 前台运行。--cwd 给开机自启用：从 Startup 拉起时 cwd 是启动文件夹，
+    // 仓库会被判成 "Startup"，看板显示一个空仓库，现象很难查
+    const dir = arg('cwd');
+    if (dir) { try { process.chdir(dir); } catch { /* 目录没了就用当前的 */ } }
+    require('../src/dashboard').serve(dir || cwd);
+  },
+
+  autostart() {                    // lore autostart on|off|status
+    const sub = rest[0] || 'status';
+    if (sub === 'on') {
+      const r = autostartMod.enable(arg('cwd', cwd), Number(process.env.AGENT_LORE_PORT || 4519));
+      if (!r.ok) return die('❌ 启用失败：' + (r.message || '被安全软件拦截'));
+      console.log('✅ 开机自启已启用，开机后无窗口后台运行');
+      console.log('   脚本 ' + r.file);
+      console.log('   仓库 ' + r.cwd);
+      return;
+    }
+    if (sub === 'off') { console.log('✅ 已关闭：' + autostartMod.disable().file); return; }
+    const st = autostartMod.status();
+    console.log((st.enabled ? '✅ 已启用' : '未启用') + '   ' + st.file);
+    if (st.cwd) console.log('   仓库 ' + st.cwd);
+    if (st.drift) console.log('   ⚠️ 配置与实际文件不一致，重新执行 lore autostart on/off 修正');
+  },
+
+  async update() {                 // lore update [--pull]
+    const r = has('pull') ? updateMod.pull() : updateMod.check();
+    if (!r.ok) return die(r.why);
+    console.log('分支 ' + r.branch + '   本地 ' + r.local + (r.remote ? '   远程 ' + r.remote : ''));
+    if (r.dirty) console.log('   ⚠️ 本地有未提交改动');
+    if (r.ahead) console.log('   本地领先 ' + r.ahead + ' 个提交');
+    if (r.offline) return console.log('   ' + r.why);
+    if (r.updated) {
+      console.log('✅ 已更新 ' + r.from + ' → ' + r.local);
+      console.log('   ⚠️ 代码已加载进当前进程，**重启看板后才生效**');
+    } else if (r.behind) {
+      console.log('   落后 ' + r.behind + ' 个提交' + (r.why ? '，' + r.why : '') + (has('pull') ? '' : '。拉取：lore update --pull'));
+    } else {
+      console.log('   已是最新');
+    }
+  },
 
   init() {                                             // 一键装 hook
     const r = install.installClaudeCode({ dryRun: has('dry') });
@@ -381,7 +450,11 @@ const CMDS = {
        lore eval compare      三种召回模式对照：keyword / vector / hybrid
 知识   lore knowledge         知识层总览：生命周期 · 覆盖地图 · 关系
        lore why <ruleKey>     一条规则的完整血缘
-观测   lore dashboard         本地看板 http://127.0.0.1:4519
+系统   lore autostart on|off  开机自启看板
+       lore update [--pull]   检查并更新 agent-lore 自身
+观测   lore dashboard         前台运行看板
+       lore dashboard -d      后台启动（推荐，不碰系统启动项）
+       lore dashboard --stop  停止 · --restart 重启 · --status 查看状态
        lore stats             修正复发率
        lore list              查看已学到的东西
        lore where             知识库位置
