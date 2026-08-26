@@ -427,39 +427,61 @@ const CMDS = {
   where() { console.log(HOME); },
 
   help() {
-    console.log(`agent-lore —— 从人类修正里学习仓库规范
+    // 默认只显示常用命令，别把 hook 内部调用的命令糊到用户脸上。全部命令用 lore help --all
+    if (!has('all')) {
+      console.log(`agent-lore —— 让 AI 编码工具从你的修正里学习仓库规范
 
-冷启动 lore bootstrap [--stat] 从现有代码库归纳规范（不必等修正累积）
-采集   lore snapshot <file>   记录 agent 写入（hook 调用）
-       lore scan              检测人类修正
-归因   lore review            输出归因提示词（零配置，交给当前 harness 的模型）
-       lore learn --json '..' 回灌归因结果
-       lore auto              有 ANTHROPIC_API_KEY 时自动归因
-升格   lore promote [--yes]   达阈值的规范入库（人工确认闸）
-       lore sync [--global]   规范 → 项目/用户级 CLAUDE.md（常驻，不走检索）
-边界   lore spec set --id X --scope "..." --out "a;b"   设当前需求边界（活跃期间无条件注入）
-       lore spec show / clear 查看 / 结束
-注入   lore inject <file>     输出边界 + 相关踩坑（hook 调用；全未命中零输出）
-接入   lore init [--dry]      一键装 Claude Code hook + 打印其它 harness 接入方式
-       lore mcp               L2：MCP stdio server（Cursor/Codex/Cline…）
-       lore watch             L3：git 工作区监听（任何工具）
-       lore uninstall         移除 hook
-检索   lore search <查询>     自然语言检索知识库，默认 hybrid
-       lore embed             探测 embedding 后端是否可用
-       lore eval init         生成评测集骨架（query 由你填）
-       lore eval compare      三种召回模式对照：keyword / vector / hybrid
-知识   lore knowledge         知识层总览：生命周期 · 覆盖地图 · 关系
-       lore why <ruleKey>     一条规则的完整血缘
-系统   lore autostart on|off  开机自启看板
-       lore update [--pull]   检查并更新 agent-lore 自身
-观测   lore dashboard         前台运行看板
-       lore dashboard -d      后台启动（推荐，不碰系统启动项）
-       lore dashboard --stop  停止 · --restart 重启 · --status 查看状态
-       lore stats             修正复发率
-       lore list              查看已学到的东西
-       lore where             知识库位置
+首次使用
+  lore init              一键接入 Claude Code（装 hook）
+  lore dashboard -d      ▶ 启动看板，浏览器开 http://127.0.0.1:4519
 
-调参   ${JSON.stringify(TUNING, null, 2).split('\n').join('\n       ')}`);
+看板起来后，采集、归因、入库都在网页上点，不用记命令。
+
+常用
+  lore dashboard -d      启动看板       lore dashboard --stop  关闭看板
+  lore knowledge         知识库总览     lore stats             规范有没有生效
+  lore search <查询>     检索知识库     lore list              看学到了什么
+
+全部命令： lore help --all`);
+      return;
+    }
+    console.log(`agent-lore 全部命令
+
+启动看板
+  lore dashboard         前台运行（Ctrl+C 退出）
+  lore dashboard -d      后台启动（推荐）· --stop 停止 · --restart 重启 · --status 状态
+
+接入
+  lore init [--dry]      装 Claude Code hook + 打印其它 harness 接入方式
+  lore mcp               MCP stdio server（Cursor/Codex/Cline…）
+  lore watch             git 工作区监听（任何工具） · lore uninstall 移除 hook
+
+学习流程（多数由 hook 自动触发，也可手敲）
+  lore scan              检测人类修正      lore review   输出归因提示词
+  lore learn --json '..' 回灌归因结果      lore auto     有 API key 时自动归因
+  lore promote [--yes]   达阈值入库        lore sync [--global]  规范→CLAUDE.md
+  lore bootstrap [--stat] 从现有代码库冷启动归纳规范
+
+需求边界
+  lore spec set --id X --scope "..." --out "a;b"   设当前需求边界
+  lore spec show / clear
+
+检索与评测
+  lore search <查询>     自然语言检索      lore embed         探测 embedding 后端
+  lore eval init         生成评测集骨架    lore eval compare  三种召回对照
+
+知识层
+  lore knowledge         生命周期·覆盖·关系   lore why <ruleKey>  单条规则血缘
+
+系统
+  lore autostart on|off  开机自启          lore update [--pull]  更新 agent-lore
+  lore stats             修正复发率        lore list   看学到的东西 · lore where 库位置
+
+hook 内部调用（一般不用手敲）
+  lore snapshot <file>   记录 agent 写入   lore inject <file>  输出注入内容
+
+调参 ~/.agent-lore 或 src/config.js：
+${JSON.stringify(TUNING, null, 2).split('\n').map((l) => '  ' + l).join('\n')}`);
   },
 };
 

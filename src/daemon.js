@@ -59,13 +59,13 @@ async function start(cwd, port) {
 
   const args = [BIN, 'dashboard'];
   if (cwd) args.push('--cwd', cwd);
-  // Windows 上必须 windowsHide:true，否则子进程会闪一个控制台黑窗口——
-  // stdio:'ignore' 挡不住它。而 detached:true 在 Windows 反而会新开一个控制台，
-  // 所以 Windows 不 detached；类 Unix 才 detached 以脱离终端。
-  const win = process.platform === 'win32';
+  // detached:true —— 让子进程独立存活，否则父进程(敲 -d 的那个)一退出就把它带走，
+  //                  表现为"启动成功但打开是空的"。
+  // windowsHide:true —— 压住控制台窗口，不闪黑窗口。
+  // 两者并存：detached 保活，windowsHide 无窗口。unref() 让父进程不等它。
   const child = spawn(process.execPath, args, {
     cwd: cwd || process.cwd(),
-    detached: !win,
+    detached: true,
     windowsHide: true,
     stdio: 'ignore',
     env: { ...process.env, AGENT_LORE_PORT: String(port) },
@@ -114,7 +114,6 @@ async function stop(port) {
  * 然后当前进程主动退出。引导进程用 node 跑一小段 inline 脚本，零额外文件。
  */
 function scheduleRestart(cwd, port) {
-  const win = process.platform === 'win32';
   const boot = `
     const net=require('net'),{spawn}=require('child_process');
     const port=${port}, bin=${JSON.stringify(BIN)}, cwd=${JSON.stringify(cwd || process.cwd())};
@@ -123,7 +122,7 @@ function scheduleRestart(cwd, port) {
     (async()=>{
       for(let i=0;i<60;i++){ if(await free()) break; await new Promise(r=>setTimeout(r,200)); }
       const c=spawn(process.execPath,[bin,'dashboard','--cwd',cwd],
-        {cwd,detached:${!win},windowsHide:true,stdio:'ignore',
+        {cwd,detached:true,windowsHide:true,stdio:'ignore',
          env:{...process.env,AGENT_LORE_PORT:String(port)}});
       c.unref();
     })();`;
