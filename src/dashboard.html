@@ -223,6 +223,14 @@ function render() {
   </div>`);
 
   // ── 待办：置顶，没有就不出现 ──
+  // 反复批评排在最前：它是"人已经说过、系统却没学会"，比未归因的 diff 更该先处理
+  const cq = (d.knowledge && d.knowledge.critique) || [];
+  if (cq.length) {
+    H.push(`<section><h2 class="todo">说过但没落实 <span class="n">${cq.length}</span></h2>
+      <div class="hint" style="margin:-2px 0 9px">这些批评在对话里重复出现，来自你说的话而不是代码 diff。
+        确认后写入知识库，之后编辑相关文件时会自动注入。</div>
+      ${cq.map(critiqueCard).join('')}</section>`);
+  }
   if (d.ready.length) {
     H.push(`<section><h2 class="todo">待确认入库 <span class="n">${d.ready.length}</span></h2>
       ${d.ready.map(readyCard).join('')}</section>`);
@@ -487,6 +495,53 @@ function diffHtml(t) {
   return '<pre class="diff">' + String(t).split('\n').map(l =>
     `<div class="${l.startsWith('+') ? 'a' : l.startsWith('-') ? 'd' : ''}">${esc(l) || '&nbsp;'}</div>`
   ).join('') + '</pre>';
+}
+
+/** 重复批评卡片：可直接改写成规范入库，改完就走正常注入，不用再敲命令 */
+function critiqueCard(g) {
+  const id = 'cq-' + g.cat + (g.kind || '').replace('.', '');
+  const where = (g.labels && g.labels.length) ? g.labels.join('、') : (g.kind || '未绑定文件');
+  return `<div class="card act">
+    <div style="display:flex;align-items:center;gap:8px">
+      <b>${esc(g.label)}</b>
+      <span class="pill warn">${g.size} 次</span>
+      ${g.sessions > 1 ? `<span class="pill bad">跨 ${g.sessions} 个会话</span>` : ''}
+      <span class="hint" style="margin-left:auto">${esc(where)}</span>
+    </div>
+    <div style="margin-top:8px">${g.samples.map(t =>
+      `<div class="hint" style="padding:3px 0;border-top:1px solid var(--line2)">· ${esc(t)}</div>`).join('')}</div>
+    <div class="acts">
+      <button class="primary" onclick="openCq('${id}')">写成规范</button>
+      <button class="ghost" onclick="dismissCq('${g.cat}','${g.kind || ''}')">忽略</button>
+    </div>
+    <div class="form" id="form-${id}">
+      <label>把这些批评归纳成一条规范。它会绑到 ${esc(where)} 这类文件上</label>
+      <textarea id="ta-${id}" placeholder="例：简历条目只陈述做了什么和结果，不写论述性表达"></textarea>
+      <div class="row">
+        <button class="primary" onclick="saveCq('${id}','${g.cat}','${g.kind || ''}')">入库</button>
+        <button class="ghost" onclick="closeCq('${id}')">取消</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function openCq(id) { const f = $('#form-' + id); if (f) { f.classList.add('on'); dirty = true; } }
+function closeCq(id) { const f = $('#form-' + id); if (f) { f.classList.remove('on'); dirty = false; } }
+
+async function saveCq(id, cat, kind) {
+  const ta = $('#ta-' + id);
+  const rule = ta && ta.value.trim();
+  if (!rule) return toast('先写一条规范');
+  const r = await post('/api/critique', { action: 'promote', cat, kind, rule });
+  dirty = false;
+  toast(r.ok ? '已入库，之后编辑相关文件会自动注入' : ('失败：' + (r.why || '')));
+  load(true);
+}
+
+async function dismissCq(cat, kind) {
+  await post('/api/critique', { action: 'dismiss', cat, kind });
+  toast('已忽略这类批评');
+  load(true);
 }
 
 /**

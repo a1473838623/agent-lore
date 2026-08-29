@@ -162,6 +162,10 @@ async function handlePost(url, body, cwd) {
       if (r.updated) setTimeout(() => daemonMod.scheduleRestart(cwd, PORT), 500);
       return { ...r, restarting: !!r.updated };
     }
+    case '/api/critique':
+      return body.action === 'promote'
+        ? critiqueMod.promoteToRule(repo, body)
+        : (critiqueMod.markHandled(repo, body.cat, body.kind), { ok: true, dismissed: true });
     case '/api/why':
       return graphMod.lineage(body.repo || repo, body.key) || { ok: false, why: '未找到' };
     case '/api/scan': {

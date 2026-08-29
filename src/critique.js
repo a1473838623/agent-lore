@@ -2,6 +2,7 @@
 const path = require('path');
 const { HOME } = require('./config');
 const { ensureDir, appendJsonl, readJsonl } = require('./util');
+const store = require('./store');
 
 /**
  * 对话层的学习信号 —— 反复出现的口头批评。
@@ -89,15 +90,59 @@ function detect(text) {
   return hits.length ? hits : null;
 }
 
+/**
+ * 反查这次批评是在说什么东西。
+ *
+ * UserPromptSubmit 事件里只有一句话，没有"当前在改哪个文件"。
+ * 但快照带 sessionId，本会话最近写过的文件就是批评的对象。
+ *
+ * 没有这一步，"这段太长"会变成一条无处可用的规则：
+ * 注入到所有文件上是噪声，不注入又等于没学。
+ */
+const RECENT_MS = 30 * 60 * 1000;
+
+function contextOf(repo, sessionId) {
+  let snaps = [];
+  try { snaps = store.listSnapshots(repo) || []; } catch { return { files: [], kind: null }; }
+
+  let mine = sessionId
+    ? snaps.filter((x) => x && x.sessionId === sessionId)
+    : [];
+
+  // 退化路径：本会话没有快照时，退回仓库级最近改过的文件。
+  // 这不是可有可无的兜底 —— 整场会话都用脚本改文件时一个快照都不会有，
+  // 而那恰恰是最需要这条信号的场景。按会话分桶会把这些批评全归到"语境未知"，
+  // 与有快照的同类批评分开，聚类直接失效。
+  if (!mine.length) {
+    const now = Date.now();
+    mine = snaps.filter((x) => x && now - (x.at || 0) < RECENT_MS);
+  }
+
+  mine = mine.sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 5);
+  // 存全路径而非文件名：pitfall 的查找键是全路径哈希，存 basename 会查不到，
+  // 现象是「入库成功但注入时命中 0 条」
+  const files = [...new Set(mine.map((x) => x.file).filter(Boolean))];
+  // 语境键取扩展名：区分"简历 .md 太长"和"代码 .js 太长"——
+  // 同一类批评落在不同介质上是两条规范，不该合并
+  const exts = mine.map((x) => path.extname(x.file || '').toLowerCase()).filter(Boolean);
+  const kind = exts.length
+    ? exts.sort((a, b) => exts.filter((e) => e === b).length - exts.filter((e) => e === a).length)[0]
+    : null;
+  return { files, kind };
+}
+
 /** 记一条批评。fail-open：出任何错都不能影响用户提问 */
 function record(repo, text, sessionId) {
   const hits = detect(text);
   if (!hits) return null;
+  const ctx = contextOf(repo, sessionId);
   const rec = {
     repo,
     text: String(text).trim().slice(0, 300),
     cats: hits.map((h) => h.cat),
     session: sessionId || null,
+    files: ctx.files,
+    kind: ctx.kind,
     at: Date.now(),
   };
   try {
@@ -122,31 +167,90 @@ function all(repo) {
  */
 function clusters(repo, { minSize = 2 } = {}) {
   const rows = all(repo).sort((a, b) => a.at - b.at);
-  const byCat = new Map();
+  const byKey = new Map();
 
+  // 聚类键 = 批评类型 + 语境介质。
+  // 只按类型分会把"简历太长"和"代码注释太长"并成一条，
+  // 那样归纳出的规范落不到任何具体场景上。
   for (const r of rows) {
     for (const cat of r.cats || []) {
-      if (!byCat.has(cat)) byCat.set(cat, []);
-      byCat.get(cat).push(r);
+      const key = cat + '|' + (r.kind || '');
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push(r);
     }
   }
 
   const out = [];
-  for (const [cat, group] of byCat) {
+  for (const [key, group] of byKey) {
     if (group.length < minSize) continue;
+    const [cat, kind] = key.split('|');
+    if (isHandled(repo, cat, kind)) continue;   // 已确认或已忽略的不再提示
     // 跨会话重复比同一会话内重复更强：说明不是一次沟通没说清，而是真没学会
     const sessions = new Set(group.map((g) => g.session).filter(Boolean)).size;
     out.push({
       cat,
+      kind: kind || null,
       label: (CATEGORIES[cat] || {}).label || cat,
       size: group.length,
       sessions,
       first: group[0].at,
       last: group[group.length - 1].at,
+      // 涉及的文件：确认为规范时，它决定这条规则该绑到哪里
+      files: [...new Set(group.flatMap((g) => g.files || []))].slice(0, 6),
+      labels: [...new Set(group.flatMap((g) => (g.files || []).map((f) => path.basename(f))))].slice(0, 6),
       samples: group.slice(-3).map((g) => g.text),
     });
   }
   return out.sort((a, b) => b.sessions - a.sessions || b.size - a.size);
 }
 
-module.exports = { detect, record, all, clusters, CATEGORIES, FILE };
+/**
+ * 把一类重复批评确认为规范并入库。
+ *
+ * 入的是 pitfall 而非 convention：批评带语境（.md 还是 .js），
+ * 而 convention 是无差别常驻 CLAUDE.md 的。
+ * "简历条目不写论述句"常驻到每次编码上下文里就是纯噪声，
+ * 它该在编辑同类文件时才出现——这正是 pitfall 的注入方式。
+ */
+function promoteToRule(repo, { cat, kind, rule }) {
+  if (!rule || !rule.trim()) return { ok: false, why: '规范内容为空' };
+  const rows = all(repo).filter((r) => (r.cats || []).includes(cat) && (r.kind || '') === (kind || ''));
+  const files = [...new Set(rows.flatMap((r) => r.files || []))];
+
+  // 绑到实际被批评过的文件上；一个都没有就退回按扩展名绑
+  const targets = files.length ? files : [kind ? '*' + kind : '*'];
+  const promote = require('./promote');
+  for (const f of targets) {
+    store.addPitfall(repo, {
+      file: f,
+      rule: rule.trim(),
+      key: promote.ruleKey(rule.trim()),
+      at: Date.now(),
+      source: 'critique',      // 来源标注：这条不是从 diff 学的，是从反复批评学的
+      evidence: rows.length,
+    });
+  }
+  store.recordMetric({ type: 'promote', repo, key: 'critique-' + cat, rule: rule.trim(), source: 'critique' });
+
+  // 已确认的批评不再重复提示
+  markHandled(repo, cat, kind);
+  return { ok: true, rule: rule.trim(), files: targets, evidence: rows.length };
+}
+
+const HANDLED = () => path.join(HOME, 'critique-handled.json');
+
+function markHandled(repo, cat, kind) {
+  let h = {};
+  try { h = JSON.parse(require('fs').readFileSync(HANDLED(), 'utf8')); } catch { /* 首次 */ }
+  h[repo + '|' + cat + '|' + (kind || '')] = Date.now();
+  try { ensureDir(HOME); require('fs').writeFileSync(HANDLED(), JSON.stringify(h, null, 2), 'utf8'); } catch { /* ignore */ }
+}
+
+function isHandled(repo, cat, kind) {
+  try {
+    const h = JSON.parse(require('fs').readFileSync(HANDLED(), 'utf8'));
+    return !!h[repo + '|' + cat + '|' + (kind || '')];
+  } catch { return false; }
+}
+
+module.exports = { detect, record, all, clusters, promoteToRule, markHandled, isHandled, CATEGORIES, FILE };
