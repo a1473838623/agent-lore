@@ -19,7 +19,6 @@ const recallMod = require('./recall');
  */
 function buildContext(cwd, file, sessionId) {
   const repo = repoId(cwd);
-  const budget = TUNING.injectTokenBudget;
 
   // ① 同文件的踩坑：最相关，优先
   const direct = store.getPitfalls(repo, file).map((p) => ({ ...p, score: 100 }));
@@ -56,12 +55,12 @@ function buildContext(cwd, file, sessionId) {
   let used = 0;
   const usedKeys = [];
   for (const p of picked) {
+    if (lines.length >= TUNING.injectMaxItems) break;          // ← 按相关性取前 N 条
+    if ((p.rule || '').length > TUNING.injectMaxRuleChars) continue;  // 异常长的规则跳过
     const line = `- ${p.rule}`;
-    const cost = estimateTokens(line);
-    if (used + cost > budget) break;                  // ← 预算裁剪
     lines.push(line);
     usedKeys.push(p.key);
-    used += cost;
+    used += estimateTokens(line);                    // 仍然统计，用于观测实际开销
   }
   if (!lines.length && !active) return null;
 

@@ -114,7 +114,7 @@ const CMDS = {
     applyVerdict(repoId(cwd), v);
   },
 
-  // —— 升格 ——
+  // —— 确认入库 ——
   promote() {                      // lore promote   列出达阈值的规范，--yes 确认入库
     const repo = repoId(cwd);
     const ready = promote.readyToPromote(repo);

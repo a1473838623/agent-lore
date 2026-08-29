@@ -494,7 +494,7 @@ function diffHtml(t) {
  *
  * 一次需求改动常横跨多个文件，逐个文件归因既重复、模型又缺跨文件上下文。
  * 所以按 (session_id + 时间邻近) 聚成批次，整批一次判断。
- * 计数上一个批次只算一次证据 —— 否则单次交互就能顶到升格阈值。
+ * 计数上一个批次只算一次证据 —— 否则单次交互就能顶到确认阈值。
  */
 let splitOpen = {};   // 批次 id → 是否展开成逐条
 
@@ -762,9 +762,9 @@ function panel() {
         <div class="meta" style="margin:7px 0 0"><span>${esc(base(p.file))}</span></div>${tagLine(p)}</div>`);
   }
   if (tab === 'cand') {
-    if (!d.candidates.length) return `<div class="empty">还没有候选规范。同类规范累计 ${d.threshold} 次才会升格</div>`;
+    if (!d.candidates.length) return `<div class="empty">还没有候选规范。同类规范累计 ${d.threshold} 次才会转为正式规范</div>`;
     return `<div class="hint" style="margin-bottom:11px">这里都是<b>全局规范</b>的候选 ——
-      同一条规范在不同文件里被修正累计 ${d.threshold} 次才升格入库。
+      同一条规范在不同文件里被修正累计 ${d.threshold} 次才转为正式规范。
       局部规范(单文件的坑)当场记录，不经过这里排队。</div>`
       + d.candidates.map(c => {
       const pct = Math.min(100, Math.round(c.count / c.threshold * 100));

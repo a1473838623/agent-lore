@@ -15,7 +15,7 @@ function stats(repo) {
   const corrections = all.filter((m) => m.type === 'correction');
   const injects = all.filter((m) => m.type === 'inject');
 
-  // ⚠️ 必须和升格时用同一套归并逻辑，否则同义但措辞不同的修正会被漏计，
+  // ⚠️ 必须和确认时用同一套归并逻辑，否则同义但措辞不同的修正会被漏计，
   // "入库前"次数被低估 → 复发率算出来是错的
   const sameRule = (c, p) => c.key === p.key || similar(c.rule || '', p.rule || '') >= 0.6;
 
