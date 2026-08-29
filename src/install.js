@@ -10,6 +10,7 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const HOOK_PRE = path.join(ROOT, 'hooks', 'pre-edit.js');
 const HOOK_POST = path.join(ROOT, 'hooks', 'post-write.js');
+const HOOK_PROMPT = path.join(ROOT, 'hooks', 'user-prompt.js');
 const MATCHER = 'Write|Edit|MultiEdit';
 
 const claudeSettingsPath = () => path.join(os.homedir(), '.claude', 'settings.json');
@@ -24,12 +25,23 @@ function installClaudeCode({ dryRun = false } = {}) {
   }
 
   cfg.hooks = cfg.hooks || {};
-  const entry = (script) => ({ matcher: MATCHER, hooks: [{ type: 'command', command: 'node "' + script + '"' }] });
+  const entry = (script, matcher) => {
+    const e = { hooks: [{ type: 'command', command: 'node "' + script + '"' }] };
+    // UserPromptSubmit 不是工具事件，没有 matcher —— 带上会导致该 hook 永不触发
+    if (matcher) e.matcher = matcher;
+    return e;
+  };
 
-  for (const [event, script] of [['PreToolUse', HOOK_PRE], ['PostToolUse', HOOK_POST]]) {
+  const plan = [
+    ['PreToolUse', HOOK_PRE, MATCHER],
+    ['PostToolUse', HOOK_POST, MATCHER],
+    // 对话层信号：批评本身就是学习素材，且不依赖改动是否经过 Write/Edit
+    ['UserPromptSubmit', HOOK_PROMPT, null],
+  ];
+  for (const [event, script, matcher] of plan) {
     // 幂等：重复安装不叠加
     cfg.hooks[event] = (cfg.hooks[event] || []).filter((h) => !JSON.stringify(h).includes('agent-lore'));
-    cfg.hooks[event].push(entry(script));
+    cfg.hooks[event].push(entry(script, matcher));
   }
 
   if (dryRun) return { ok: true, dryRun: true, path: p, preview: JSON.stringify(cfg.hooks, null, 2) };
@@ -43,7 +55,7 @@ function uninstallClaudeCode() {
   if (!fs.existsSync(p)) return { ok: false, reason: '没有 settings.json' };
   const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
   let removed = 0;
-  for (const ev of ['PreToolUse', 'PostToolUse']) {
+  for (const ev of ['PreToolUse', 'PostToolUse', 'UserPromptSubmit']) {
     if (!cfg.hooks || !cfg.hooks[ev]) continue;
     const before = cfg.hooks[ev].length;
     cfg.hooks[ev] = cfg.hooks[ev].filter((h) => !JSON.stringify(h).includes('agent-lore'));

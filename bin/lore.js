@@ -22,6 +22,7 @@ const settingsMod = require('../src/settings');
 const autostartMod = require('../src/autostart');
 const updateMod = require('../src/update');
 const daemonMod = require('../src/daemon');
+const critiqueMod = require('../src/critique');
 
 const NL = String.fromCharCode(10);
 const cwd = process.cwd();
@@ -152,6 +153,23 @@ const CMDS = {
     if (!ctx) return;              // ← 未命中：什么都不输出，零 token
     store.recordMetric({ type: 'inject', repo: ctx.repo, file, keys: ctx.keys, tokens: ctx.tokens });
     process.stdout.write(ctx.text);
+  },
+
+  critique() {                     // lore critique   反复出现的口头批评
+    const repo = has('all') ? null : repoId(cwd);
+    const rows = critiqueMod.all(repo);
+    const cl = critiqueMod.clusters(repo, { minSize: Number(arg('min', 2)) });
+    console.log(`共采集 ${rows.length} 条批评，其中 ${cl.length} 类重复出现`);
+    if (!cl.length) {
+      return console.log(NL + '没有重复模式。这条信号来自 UserPromptSubmit 钩子，' + NL
+        + '若从未采集到，先跑 lore init 重新安装钩子');
+    }
+    for (const g of cl) {
+      console.log(NL + `[${g.label}]  ${g.size} 次  跨 ${g.sessions} 个会话`
+        + (g.sessions > 1 ? '  ← 跨会话重复，说明不是一次没说清' : ''));
+      for (const s of g.samples) console.log('   · ' + s.slice(0, 60));
+    }
+    console.log(NL + '这些是「说过但没落实」的规范。确认后用 lore learn 写入知识库');
   },
 
   // —— 观测 ——
@@ -511,6 +529,7 @@ const CMDS = {
 
 知识层
   lore knowledge         生命周期·覆盖·关系   lore why <ruleKey>  单条规则溯源
+  lore critique          反复出现的口头批评，来自对话而非 diff
 
 系统
   lore autostart on|off  开机自启          lore update [--pull]  更新 agent-lore

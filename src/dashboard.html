@@ -160,7 +160,7 @@ function signature(d) {
     d.batches.map(b => b.id + b.items.length), d.ready.map(r => r.key + r.count),
     d.candidates.map(c => c.key + c.count), d.stats.totalInjects, d.stats.totalInjectedTokens,
     [...d.knowledge.lifecycle, ...d.knowledge.globalLifecycle].map(x => x.key + x.state + x.injections),
-    islandBy, islandOpen,
+    islandBy, islandOpen, (d.knowledge.critique || []).map(c => c.cat + c.size),
     JSON.stringify(d.settings), JSON.stringify(d.autostart),
     d.stats.rules.map(r => r.key + r.before + r.after + r.injected),
   ]);
@@ -657,7 +657,26 @@ function knowledgePanel() {
   H.push(`</div>`);
 
   // ④ 关系密度
-  // ④ 知识岛 —— 把知识库按某维度切成若干块，看每块成不成体系
+  // ④ 反复出现的口头批评 —— 与 diff 正交的另一条信号
+  const cq = kn.critique || [];
+  if (cq.length) {
+    H.push(`<div class="grp" style="color:var(--warn)">说过但没落实 <span class="pill warn">${cq.length}</span></div>`);
+    H.push(`<div class="hint" style="margin:-4px 0 9px">这些批评在对话里重复出现过，
+      不来自代码 diff。有些规范从来不体现为一次修改，只体现为人反复说同一句话。</div>`);
+    for (const g of cq) {
+      H.push(`<div class="card">
+        <div style="display:flex;align-items:center;gap:8px">
+          <b>${esc(g.label)}</b>
+          <span class="pill warn">${g.size} 次</span>
+          ${g.sessions > 1 ? `<span class="pill bad">跨 ${g.sessions} 个会话</span>` : ''}
+        </div>
+        <div style="margin-top:8px">${g.samples.map(t =>
+          `<div class="hint" style="padding:3px 0;border-top:1px solid var(--line2)">· ${esc(t)}</div>`).join('')}</div>
+      </div>`);
+    }
+  }
+
+  // ⑤ 知识岛 —— 把知识库按某维度切成若干块，看每块成不成体系
   H.push(islandSection(kn));
   return H.join('');
 }

@@ -18,6 +18,7 @@ const settings = require('./settings');
 const autostart = require('./autostart');
 const updater = require('./update');
 const daemonMod = require('./daemon');
+const critiqueMod = require('./critique');
 
 /**
  * 本地看板。
@@ -93,6 +94,8 @@ function data(cwd) {
         injections: x.injections, recurrence: x.recurrence, evidence: x.evidence.length,
         files: x.files.length, related: x.related.length, source: x.source,
       })),
+      // 对话层信号：反复出现的口头批评，与 diff 正交
+      critique: critiqueMod.clusters(repo),
       coverage: graphMod.coverage(repo === GLOBAL ? [GLOBAL] : [repo, GLOBAL]),
       graph: graphMod.graph(repo === GLOBAL ? [GLOBAL] : [repo, GLOBAL]),
       // 知识岛：三个维度都算好，前端切换不用回后端
