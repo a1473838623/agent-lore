@@ -266,6 +266,40 @@ const CMDS = {
     console.log(NL + '看单条溯源：lore why <ruleKey>');
   },
 
+  /**
+   * lore retrieve --mode hybrid --k 10
+   * 批量检索的机器接口：stdin 逐行 {"id","q"}，stdout 逐行 {"id","ranked",...}。
+   *
+   * 给 Python 评测层用。做成批量而非逐次调用，是因为 embedding 有进程内缓存，
+   * 一次起进程跑完整个评测集，比每条查询起一次 node 快一个量级。
+   */
+  async retrieve() {
+    const evalMod2 = require('../src/eval');
+    const recallMod = require('../src/recall');
+    const items = evalMod2.corpus(REPO_OVERRIDE || repoId(cwd));
+    if (!items.length) return die('知识库为空');
+
+    const mode = arg('mode', 'hybrid');
+    const k = Number(arg('k', 10));
+
+    const lines = fs.readFileSync(0, 'utf8').split(NL).filter((l) => l.trim());
+    for (const line of lines) {
+      let q; try { q = JSON.parse(line); } catch { continue; }
+      if (!q || !q.q) continue;
+      try {
+        const { rows, degraded } = await recallMod.recall(q.q, items, { mode, topK: k });
+        process.stdout.write(JSON.stringify({
+          id: q.id != null ? q.id : q.q,
+          ranked: rows.map((r) => r.item.key),
+          scores: rows.map((r) => Number((r.score != null ? r.score : 0).toFixed(4))),
+          degraded: !!degraded,
+        }) + NL);
+      } catch (e) {
+        process.stdout.write(JSON.stringify({ id: q.id != null ? q.id : q.q, ranked: [], error: String(e.message || e) }) + NL);
+      }
+    }
+  },
+
   async search() {                 // lore search <自然语言查询>
     // 必须连带跳过旗标的值。只滤 --xxx 会把 _global、3 这些值当成查询词，
     // 污染 embedding 后排序整个变样——而且现象很隐蔽，看起来像召回算法不准
@@ -472,6 +506,7 @@ const CMDS = {
 
 检索与评测
   lore search <查询>     自然语言检索      lore embed         探测 embedding 后端
+  lore retrieve          批量检索 JSON 接口，供 Python 评测层调用
   lore eval init         生成评测集骨架    lore eval compare  三种召回对照
 
 知识层

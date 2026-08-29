@@ -17,13 +17,16 @@ const { sha1, ensureDir, readIfExists } = require('./util');
  * 但**不默认开启**：检索词是专有名词时关键词精确率更高（见 eval.js 的对照数据）。
  * 做成可切换，按查询形态选，而不是一刀切上向量。
  *
- * 配置：LORE_EMBED=ollama:nomic-embed-text | openai:text-embedding-3-small | off
+ * 配置：LORE_EMBED=ollama:bge-m3 | openai:text-embedding-3-small | off
  */
 
 const CACHE_DIR = path.join(HOME, 'embed-cache');
 
 function parseSpec(spec) {
-  const raw = spec || process.env.LORE_EMBED || 'ollama:nomic-embed-text';
+  // 默认用 bge-m3 而非 nomic-embed-text：离线评测实测中文自然语言查询
+  // 在 nomic 上召回仅 30%、英文 100%，瓶颈是跨语言对齐；换多语言模型后中文追平。
+  // 评测得出的结论必须落到默认值上，否则等于没做——用户不会去读评测报告再手动配。
+  const raw = spec || process.env.LORE_EMBED || 'ollama:bge-m3';
   if (raw === 'off') return null;
   const i = raw.indexOf(':');
   return i < 0 ? { kind: 'ollama', model: raw } : { kind: raw.slice(0, i), model: raw.slice(i + 1) };
