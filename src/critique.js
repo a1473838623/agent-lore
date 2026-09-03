@@ -28,7 +28,8 @@ const store = require('./store');
  * 候选本来就要人工确认才入库。
  */
 
-const FILE = () => path.join(HOME, 'critique.jsonl');
+// 改走 store：单机时它读本地文件，配了 AGENT_LORE_REMOTE 就走远端。
+// 原来直接拼 HOME 路径，数据挪到服务器后这里会继续写本机，造成一半知识分叉
 
 /**
  * 批评类型表。聚类以类型为键，所以词表的作用是**把不同说法归到同一类**，
@@ -147,14 +148,14 @@ function record(repo, text, sessionId) {
   };
   try {
     ensureDir(HOME);
-    appendJsonl(FILE(), rec);
+    store.addCritique(rec);
   } catch { return null; }
   return rec;
 }
 
 function all(repo) {
   let rows = [];
-  try { rows = readJsonl(FILE()); } catch { return []; }
+  try { rows = store.readCritique(); } catch { return []; }
   return repo ? rows.filter((r) => r.repo === repo) : rows;
 }
 
@@ -237,20 +238,20 @@ function promoteToRule(repo, { cat, kind, rule }) {
   return { ok: true, rule: rule.trim(), files: targets, evidence: rows.length };
 }
 
-const HANDLED = () => path.join(HOME, 'critique-handled.json');
+
 
 function markHandled(repo, cat, kind) {
   let h = {};
-  try { h = JSON.parse(require('fs').readFileSync(HANDLED(), 'utf8')); } catch { /* 首次 */ }
+  h = store.readHandled();
   h[repo + '|' + cat + '|' + (kind || '')] = Date.now();
-  try { ensureDir(HOME); require('fs').writeFileSync(HANDLED(), JSON.stringify(h, null, 2), 'utf8'); } catch { /* ignore */ }
+  store.writeHandled(h);
 }
 
 function isHandled(repo, cat, kind) {
   try {
-    const h = JSON.parse(require('fs').readFileSync(HANDLED(), 'utf8'));
+    const h = store.readHandled();
     return !!h[repo + '|' + cat + '|' + (kind || '')];
   } catch { return false; }
 }
 
-module.exports = { detect, record, all, clusters, promoteToRule, markHandled, isHandled, CATEGORIES, FILE };
+module.exports = { detect, record, all, clusters, promoteToRule, markHandled, isHandled, CATEGORIES };

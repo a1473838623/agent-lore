@@ -205,6 +205,48 @@ function serve(cwd) {
       res.end(JSON.stringify(obj));
     };
     try {
+      // 新机器接入时从这里取代码，不必配 SSH 或等 GitHub 同步。
+      // 更重要的是版本必然一致 —— 发的就是服务端自己在跑的那份，
+      // 而 hook 与服务端的接口对不上时的表现是静默失败，最难查
+      if (req.method === 'GET' && req.url === '/code') {
+        const { spawn } = require('child_process');
+        res.writeHead(200, {
+          'content-type': 'application/gzip',
+          'content-disposition': 'attachment; filename="agent-lore.tar.gz"',
+        });
+        // 只发运行需要的，不发 .git 与数据
+        const tar = spawn('tar', ['-czf', '-', '-C', path.join(__dirname, '..'),
+          'src', 'bin', 'hooks', 'package.json'], { stdio: ['ignore', 'pipe', 'ignore'] });
+        return tar.stdout.pipe(res);
+      }
+
+      // 各机器的 hook 通过这个接口读写唯一那份知识数据。
+      // 它能任意读写，比只读的看板权限大得多，所以单独校验令牌；
+      // 没配令牌时不校验，保持本机单机使用的零配置体验
+      if (req.method === 'POST' && req.url === '/store') {
+        const TOKEN = process.env.AGENT_LORE_TOKEN || '';
+        if (TOKEN && req.headers['x-lore-token'] !== TOKEN) {
+          res.writeHead(403, { 'content-type': 'application/json; charset=utf-8' });
+          return res.end(JSON.stringify({ ok: false, why: '令牌不对' }));
+        }
+        const { fn, args } = (await readBody(req)) || {};   // readBody 已经解析过 JSON
+        // 记下是谁在调。装了 hook 不等于在用，只有真实调用能证明；
+        // 多台机器共用一份数据时，这也是唯一能看出「几台在接入」的地方
+        try {
+          const who = decodeURIComponent(req.headers['x-lore-client'] || '未知');
+          const cf = require('path').join(require('./config').HOME, 'clients.json');
+          const nfs = require('fs');
+          let m = {};
+          try { m = JSON.parse(nfs.readFileSync(cf, 'utf8')); } catch { /* 首次 */ }
+          const e = m[who] || { calls: 0 };
+          m[who] = { calls: e.calls + 1, last: Date.now(), lastFn: fn };
+          nfs.writeFileSync(cf, JSON.stringify(m, null, 2), 'utf8');
+        } catch { /* 记不上不影响主流程 */ }
+        const fs = require('./store-fs');
+        // 只放行 store 自己导出的函数，不能拿这个接口调到别的东西
+        if (typeof fs[fn] !== 'function') return json({ ok: false, why: '未知函数 ' + fn });
+        return json({ ok: true, value: fs[fn](...(args || [])) });
+      }
       if (req.method === 'POST') return json(await handlePost(req.url, await readBody(req), cwd));
       if (req.url === '/api') return json(data(cwd));
     } catch (e) {
@@ -228,8 +270,13 @@ function serve(cwd) {
     process.exit(1);
   });
 
-  server.listen(PORT, '127.0.0.1', () => {
-    console.log('[lore] 看板 http://127.0.0.1:' + PORT + '   (Ctrl+C 退出)');
+  // 默认只监听本机：看板上是编码规范与人工修正记录，不该随手开到局域网。
+  // 跑在容器里时必须绑 0.0.0.0，否则端口映射出去也连不上 ——
+  // 那种场景下暴露范围由 compose 的端口映射和外层网络决定，是一个有意识的选择
+  const HOST = process.env.AGENT_LORE_HOST || '127.0.0.1';
+  server.listen(PORT, HOST, () => {
+    const shown = (HOST === '0.0.0.0' || HOST === '::') ? '127.0.0.1' : HOST;
+    console.log('[lore] 看板 http://' + shown + ':' + PORT + '   (Ctrl+C 退出)');
   });
 }
 

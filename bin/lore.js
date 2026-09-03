@@ -469,6 +469,7 @@ const CMDS = {
     if (!r.ok) return die(r.reason);
     if (r.dryRun) { console.log('[预览] ' + r.path + String.fromCharCode(10) + r.preview); return; }
     console.log('✅ Claude Code hook 已装入 ' + r.path + '（原文件已备份）');
+    if (r.stale) console.log('   顺带清掉 ' + r.stale + ' 条旧的或失效的 lore hook');
     console.log('   重启 Claude Code 后生效');
     for (const [name, snippet] of Object.entries(install.otherHarnesses())) {
       console.log(String.fromCharCode(10) + '── ' + name + ' ──' + String.fromCharCode(10) + snippet);
@@ -478,6 +479,10 @@ const CMDS = {
   uninstall() {
     const r = install.uninstallClaudeCode();
     console.log(r.ok ? '✅ 已移除 ' + r.removed + ' 条 hook 配置' : r.reason);
+  },
+
+  status() {                       // lore status   接入自检：到底在不在用
+    console.log(require('../src/status').report(repoId(cwd)));
   },
 
   where() { console.log(HOME); },
@@ -494,7 +499,8 @@ const CMDS = {
 看板起来后，采集、归因、入库都在网页上点，不用记命令。
 
 常用
-  lore dashboard -d      启动看板       lore dashboard --stop  关闭看板
+  lore status            接入自检       lore dashboard -d      启动看板
+  lore dashboard --stop  关闭看板
   lore knowledge         知识库总览     lore stats             规范有没有生效
   lore search <查询>     检索知识库     lore list              看学到了什么
 

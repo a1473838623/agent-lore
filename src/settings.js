@@ -17,6 +17,11 @@ const DEFAULTS = {
   autostartCwd: null,      // 自启时用哪个仓库目录——看板是按仓库作用域的，不能用启动文件夹的 cwd
   autoUpdate: false,       // 启动时自动拉取 agent-lore 新版本
   refreshMs: 5000,         // 看板轮询间隔，0 = 关闭
+  // 多台机器共用一份知识时填这三个：数据只在服务器上，本机不存。
+  // 环境变量同名项优先级更高，留空即本机读写文件
+  remote: null,            // 例如 http://10.0.8.2:4519
+  remoteToken: null,
+  remoteTimeout: 5000,
 };
 
 function load() {

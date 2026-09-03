@@ -24,15 +24,14 @@ const recallMod = require('./recall');
  *   两类分开统计，才能看出两种召回各自的强项；混在一起算总分会把结论抹平。
  */
 
-const evalFile = (repo) => path.join(HOME, 'eval', repo + '.jsonl');
+// 评测语料同样改走 store，理由同 critique.js
 
 function load(repo) {
-  return readJsonl(evalFile(repo)).filter((r) => r.q && Array.isArray(r.expect));
+  return store.readEval(repo).filter((r) => r.q && Array.isArray(r.expect));
 }
 
 function add(repo, rec) {
-  ensureDir(path.dirname(evalFile(repo)));
-  appendJsonl(evalFile(repo), rec);
+  store.addEval(repo, rec);
 }
 
 /** 被检索的候选池：规范 + 踩坑，都带上稳定的 key 便于标注 */
@@ -109,7 +108,7 @@ function initSkeleton(repo) {
     q: '', expect: [it.key], type: 'symbol',
     _hint: it.rule.slice(0, 90),
   })).filter((r) => !existing.has(r.q));
-  return { file: evalFile(repo), rows, corpusSize: items.length };
+  return { file: store.evalPath(repo), rows, corpusSize: items.length };
 }
 
-module.exports = { load, add, corpus, run, compare, initSkeleton, evalFile };
+module.exports = { load, add, corpus, run, compare, initSkeleton };

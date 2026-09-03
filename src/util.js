@@ -49,6 +49,40 @@ function gitRoot(cwd) {
   } catch { return null; }
 }
 
+// gitRoot 要 spawn 一次 git，按目录记住结果。hook 进程活得很短，
+// 一次调用通常只涉及一两个目录，缓存足够，也不必考虑失效
+const _rootCache = new Map();
+
+/**
+ * 仓库内相对路径，正斜杠分隔。pitfall 与 snapshot 用它做 key。
+ *
+ * 不能用绝对路径：那会把知识绑死在这台机器的目录布局上。换个盘符、
+ * 挪个目录、或者换台机器，sha1 全变，积累的条目一条都召回不到 ——
+ * 而 repoId 本身是与路径无关的，key 却不是，两者对不齐。
+ *
+ * 非 git 目录没有天然锚点，退回按仓库名切：路径里最后一次出现 repo
+ * 的位置之后就是相对路径。再不行才用文件名，此时有重名风险，
+ * 但仍好过绝对路径 —— 至少跨机器是稳定的。
+ */
+function repoRel(repo, file) {
+  const abs = path.resolve(file);
+  const dir = path.dirname(abs);
+  if (!_rootCache.has(dir)) _rootCache.set(dir, gitRoot(dir));
+  let root = _rootCache.get(dir);
+  if (!root && repo) {
+    // repoId 可能来自 git remote，形如 owner__name，而目录名只有 name，
+    // 所以两种写法都要试，否则有 remote 的仓库在这条兜底路径上永远匹配不到
+    const names = [repo, repo.split('__').pop()];
+    const segs = abs.split(/[\\/]/);
+    for (const n of names) {
+      const i = segs.lastIndexOf(n);
+      if (i >= 0) { root = segs.slice(0, i + 1).join(path.sep); break; }
+    }
+  }
+  const rel = root ? path.relative(root, abs) : path.basename(abs);
+  return rel.split(path.sep).join('/');
+}
+
 /** 粗略 token 估算。英文 ~4 char/token，中文更密，取 2.5 保守些 */
 const estimateTokens = (s) => Math.ceil([...s].reduce(
   (n, c) => n + (c.charCodeAt(0) > 127 ? 1 / 1.6 : 1 / 4), 0));
@@ -69,4 +103,4 @@ function extractSymbols(content, limit = 40) {
   return [...out];
 }
 
-module.exports = { ensureDir, sha1, readIfExists, appendJsonl, readJsonl, repoId, gitRoot, estimateTokens, extractSymbols };
+module.exports = { ensureDir, sha1, readIfExists, appendJsonl, readJsonl, repoId, gitRoot, repoRel, estimateTokens, extractSymbols };
