@@ -92,6 +92,98 @@ L2/L3 的接入片段由 `lore init` 一并打印。**L3 是可移植性的兜�
 只要 agent 改了文件工作区就有变化，未经 L1/L2 上报的变更即视为人类修正，
 这个推断在任何 harness 下都成立。
 
+## 换一台机器
+
+`lore init` 之外的两件事 —— 知识库在哪、embedding 后端在哪 —— 是可配置的，
+且**两者互不相干**：知识可以放服务器上共用，embedding 仍在本机算；反过来也行。
+
+### 1. 装上并接入
+
+```bash
+git clone https://github.com/a1473838623/agent-lore && cd agent-lore && npm link
+lore init          # 装 Claude Code hook（会先备份 settings.json，重复执行不叠加）
+```
+
+### 2. 指定知识库位置
+
+不配任何东西 = 本机自己存一份，数据在 `~/.agent-lore`（用 `AGENT_LORE_HOME` 可改到别处）。
+
+要和其它机器共用服务器上那一份，写 `~/.agent-lore/settings.json`：
+
+```json
+{
+  "remote": "http://192.168.2.97:4519",
+  "remoteToken": "服务器上 AGENT_LORE_TOKEN 的值",
+  "remoteTimeout": 5000
+}
+```
+
+等价的环境变量是 `AGENT_LORE_REMOTE` / `AGENT_LORE_TOKEN` / `AGENT_LORE_TIMEOUT`，
+优先级高于 settings.json。
+
+> ⚠️ **优先用 settings.json，别用环境变量。** Windows 上 `setx` 设的变量对已运行的
+> 进程无效，而 hook 继承的是 Claude Code **启动那一刻**的环境 —— 改完必须重启
+> Claude Code 才生效，很容易以为配好了其实没有。settings.json 是每次调用现读的，
+> 没这个问题。`lore status` 会告诉你当前生效的是哪一个。
+
+> `remoteToken` 是明文存在这个文件里的。它只保护局域网内的一个知识库端口，
+> 但仍然别把这个文件提交进任何仓库。
+
+### 3. 指定 Ollama（或其它 embedding 后端）位置
+
+同一份 `settings.json`：
+
+```json
+{
+  "embed": "ollama:bge-m3",
+  "embedBase": "http://192.168.2.97:11434"
+}
+```
+
+- `embedBase` **留空 = 本机** `http://127.0.0.1:11434`。Ollama 就跑在本机时什么都不用配，
+  只要 `ollama pull bge-m3`。
+- 不想用向量召回：`"embed": "off"`，只走关键词。
+- 用云端 openai 兼容后端（OpenAI、硅基流动、DashScope 兼容模式…）：
+
+  ```json
+  { "embed": "openai:text-embedding-3-small",
+    "embedBase": "https://api.siliconflow.cn/v1",
+    "embedKey": "sk-…" }
+  ```
+
+  这条会把规范文本发到那个服务商，本机/内网方案不会。key 也可以放
+  `LORE_EMBED_KEY` 或 `OPENAI_API_KEY` 环境变量里，比写进文件稳妥。
+
+环境变量等价物：`LORE_EMBED` / `LORE_EMBED_BASE` / `LORE_EMBED_KEY` / `LORE_EMBED_TIMEOUT`。
+
+> ⚠️ **Ollama 默认只监听 `127.0.0.1`**，别的机器连不上。要让它对外，得在
+> **跑 Ollama 的那台机器上**设 `OLLAMA_HOST=0.0.0.0` 再重启 Ollama。
+> 这个变量是给**服务端绑定**用的，不要拿它当客户端地址 —— 客户端地址填 `embedBase`。
+
+### 4. 验证
+
+```bash
+lore status    # hook 装没装、数据读本地还是服务器、服务器通不通、embedding 指向哪
+lore embed     # 实际连一次 embedding 后端，打印维度和地址
+```
+
+两条都绿才算装好。任何一环断了都是静默失败 —— hook 有 fail-open，读不到就跳过，
+界面上什么都不显示，所以「配好了以为在用，其实一直没生效」是最容易发生的状态。
+
+### 配置优先级
+
+| 项 | 环境变量 | settings.json | 不配时 |
+|---|---|---|---|
+| 数据目录 | `AGENT_LORE_HOME` | — | `~/.agent-lore` |
+| 知识库 | `AGENT_LORE_REMOTE` | `remote` | 本机文件 |
+| 知识库令牌 | `AGENT_LORE_TOKEN` | `remoteToken` | 无 |
+| embedding 后端 | `LORE_EMBED` | `embed` | `ollama:bge-m3` |
+| embedding 地址 | `LORE_EMBED_BASE` | `embedBase` | 本机 `11434`（ollama）|
+| embedding key | `LORE_EMBED_KEY` / `OPENAI_API_KEY` | `embedKey` | 无 |
+
+环境变量一律优先于 settings.json。
+
+
 ## 日常用法
 
 **装上 hook 之后，采集是全自动的** —— `PostToolUse` 每次触发都会顺带扫描一遍，
