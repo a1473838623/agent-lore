@@ -22,6 +22,12 @@ const DEFAULTS = {
   remote: null,            // 例如 http://10.0.8.2:4519
   remoteToken: null,
   remoteTimeout: 5000,
+  // —— Embedding 后端。和 remote 同一套规矩:同名环境变量优先,留空就用这里的值。
+  // 独立于 remote 是有意的:知识库放服务器上,不代表 embedding 也得在同一台机器上算。
+  embed: 'ollama:bge-m3',  // 'off' 关闭 | 'ollama:<模型>' | 'openai:<模型>'
+  embedBase: null,         // 后端地址。留空按后端类型取默认(ollama → 本机 11434)
+  embedKey: null,          // openai 兼容后端的 key。放环境变量更稳妥,这里是图方便
+  embedTimeout: 30000,     // 单次 embedding 请求超时(毫秒)
 };
 
 function load() {

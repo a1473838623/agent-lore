@@ -13,6 +13,7 @@ const os = require('os');
 const path = require('path');
 const { HOME } = require('./config');
 const { conf } = require('./remote');
+const embedMod = require('./embed');
 
 const HOOKS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit'];
 
@@ -64,6 +65,22 @@ function report(repo) {
     L.push(`              配置来源 ${process.env.AGENT_LORE_REMOTE ? '环境变量' : 'settings.json'}`);
   }
   L.push(`  连通        ${p.ok ? `正常　${p.ms}ms　全局规范 ${p.lines} 行` : '失败：' + p.why}`);
+
+  // Embedding 是同一类静默失败：配错机器不会报错，只是语义召回一直不生效、
+  // 悄悄降级回关键词。这里只报配置（同步、不发请求），要验连通用 `lore embed`。
+  const ec = embedMod.conf();
+  const espec = embedMod.parseSpec();
+  if (!espec) {
+    L.push('  Embedding   已关闭（embed=off）　语义召回不启用，仅用关键词');
+  } else {
+    const ebase = espec.kind === 'ollama'
+      ? embedMod.ollamaBase(ec.base)
+      : (ec.base || 'https://api.openai.com/v1');
+    const esrc = process.env.LORE_EMBED || process.env.LORE_EMBED_BASE ? '环境变量'
+      : (ec.base ? 'settings.json' : '默认值');
+    L.push(`  Embedding   ${espec.kind}:${espec.model} → ${ebase}`);
+    L.push(`              配置来源 ${esrc}　连通性用 \`lore embed\` 验`);
+  }
 
   L.push('');
   const missing = HOOKS.filter((e) => !h.found[e]);

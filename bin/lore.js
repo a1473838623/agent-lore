@@ -352,9 +352,12 @@ const CMDS = {
 
   async embed() {                  // lore embed   探测 embedding 后端
     const r = await embedMod.probe(arg('spec'));
+    // 带上地址：后端不通时第一个要排除的就是"是不是连错机器了"
     console.log(r.ok
-      ? `✅ ${r.kind}:${r.model}  维度 ${r.dim}`
-      : `❌ ${r.kind || '?'}:${r.model || '?'} 不可用 —— ${r.why}` + NL + '   召回会自动降级到关键词，不影响使用');
+      ? `✅ ${r.kind}:${r.model}  维度 ${r.dim}` + NL + `   ${r.base}`
+      : `❌ ${r.kind || '?'}:${r.model || '?'} 不可用 —— ${r.why}` + NL
+        + (r.base ? `   地址 ${r.base}` + NL : '')
+        + '   召回会自动降级到关键词，不影响使用');
   },
 
   async eval() {                   // lore eval init|run|compare
