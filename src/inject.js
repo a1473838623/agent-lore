@@ -130,7 +130,13 @@ function syncClaudeMd(cwd, { global: isGlobal = false } = {}) {
   // 写完必须验证：上面那个 bug 就是"报告成功但没生效"
   const verify = fs.readFileSync(target, 'utf8');
   const written = flat.length;   // 数规则条数，别把 ### 分组标题算进去
-  const actual = verify.split('\n').filter((l) => l.startsWith('- ')).length;
+  // 只数块内。CLAUDE.md 里块外的内容是用户自己写的，可能本来就有 `- ` 列表项，
+  // 算进来就会让一次正确的写入被判成失败 —— 和上面那个静默失败方向相反、同样难查。
+  // 找不到块说明写入真的没生效，此时 actual=0，verified 自然为 false。
+  const vi = verify.indexOf(BEGIN);
+  const vj = verify.indexOf(END);
+  const scope = vi >= 0 && vj > vi ? verify.slice(vi, vj) : '';
+  const actual = scope.split('\n').filter((l) => l.startsWith('- ')).length;
   return { written: true, target, count: written, verified: actual === written, actual };
 }
 
