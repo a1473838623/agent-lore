@@ -42,11 +42,41 @@ function probe(base, token, timeout) {
   const t0 = Date.now();
   try {
     const store = require('./store');
-    const n = store.getConventions('_global').split('\n').length;
-    return { ok: true, ms: Date.now() - t0, lines: n };
+    const conv = store.getConventions('_global');
+    const lines = conv.split('\n');
+    return {
+      ok: true, ms: Date.now() - t0, lines: lines.length,
+      // 规则条数与行数分开：下面比对落地情况时要的是条数，行数含标题与空行
+      rules: lines.filter((l) => l.startsWith('- ')).length,
+    };
   } catch (e) {
     return { ok: false, ms: Date.now() - t0, why: e.message };
   }
+}
+
+/**
+ * 规范有没有真的落到 CLAUDE.md。
+ *
+ * 这是本文件开头说的那类静默失败的又一处：规范不走检索，只能靠
+ * `lore sync --global` 写进 ~/.claude/CLAUDE.md 由 harness 常驻加载。
+ * hook 装好了、后端也通了，唯独这一步没跑过——规范就一条都不生效，
+ * 而前面每一项都是绿的，从自检里看不出任何异常。
+ *
+ * 只读不写：发现不一致也不自动同步。用户的 CLAUDE.md 可能是手写积累的，
+ * 什么时候覆盖那个文件应该由人决定，自检不该有副作用。
+ */
+function syncState(expected) {
+  const target = path.join(os.homedir(), '.claude', 'CLAUDE.md');
+  let text;
+  try { text = fs.readFileSync(target, 'utf8'); } catch { return { state: 'missing', target }; }
+  const BEGIN = '<!-- agent-lore:begin -->';
+  const END = '<!-- agent-lore:end -->';
+  const i = text.indexOf(BEGIN);
+  const j = text.indexOf(END);
+  if (i < 0 || j <= i) return { state: 'noblock', target };
+  // 只数块内。用户自己在 CLAUDE.md 里写的列表项不属于 lore，算进来会误报不一致
+  const actual = text.slice(i, j).split('\n').filter((l) => l.startsWith('- ')).length;
+  return { state: actual === expected ? 'ok' : 'stale', actual, target };
 }
 
 function report(repo) {
@@ -65,6 +95,17 @@ function report(repo) {
     L.push(`              配置来源 ${process.env.AGENT_LORE_REMOTE ? '环境变量' : 'settings.json'}`);
   }
   L.push(`  连通        ${p.ok ? `正常　${p.ms}ms　全局规范 ${p.lines} 行` : '失败：' + p.why}`);
+
+  if (p.ok) {
+    const s = syncState(p.rules);
+    const fix = '　跑 `lore sync --global`';
+    L.push('  规范落地    ' + (
+      s.state === 'ok'      ? `${p.rules} 条已在 ${s.target}`
+      : s.state === 'missing' ? `CLAUDE.md 不存在，${p.rules} 条规范一条都没生效。${fix}`
+      : s.state === 'noblock' ? `CLAUDE.md 里没有 agent-lore 块，规范未生效。${fix}`
+      : `后端 ${p.rules} 条，CLAUDE.md 里 ${s.actual} 条，不一致。${fix}`
+    ));
+  }
 
   // Embedding 是同一类静默失败：配错机器不会报错，只是语义召回一直不生效、
   // 悄悄降级回关键词。这里只报配置（同步、不发请求），要验连通用 `lore embed`。
